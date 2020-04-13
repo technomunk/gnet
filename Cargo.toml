@@ -1,9 +1,16 @@
 [package]
 name = "gnet"
-version = "0.1.0"
-authors = ["Griffone <thegriffones@gmail.com>"]
+version = "0.0.1"
+authors = ["Grigory 'Griffone' Glukhov <thegriffones@gmail.com>"]
 edition = "2018"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+description = "Message-based networking over UDP for real-time applications."
+readme = "readme.md"
+keywords = ["networking", "udp", "message"]
+categories = ["network-programming"]
+licence = "Apache-2.0 OR MIT"
+
+repository = "https://github.com/Griffone/gnet"
+documentation = "https://docs.rs/gnet"
 
 [dependencies]
