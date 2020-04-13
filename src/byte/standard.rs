@@ -13,10 +13,12 @@ macro_rules! impl_byte_serialize_numeric {
 			fn byte_count(&self) -> usize { size_of::<Self>() }
 			#[inline]
 			fn to_bytes(&self, bytes: &mut [u8]) {
+				assert!(bytes.len() >= size_of::<Self>());
 				unsafe { *(&mut bytes[0] as *mut _ as *mut _) = (*self).to_le_bytes(); };
 			}
 			#[inline]
 			fn from_bytes(bytes: &[u8]) -> (Self, usize) {
+				assert!(bytes.len() >= size_of::<Self>());
 				let result = Self::from_le_bytes(unsafe { *(&bytes[0] as *const _ as *const _) });
 				(result, size_of::<Self>())
 			}
@@ -60,23 +62,24 @@ macro_rules! impl_byte_serialize_generic_array {
 				byte_count
 			}
 			#[inline]
-			fn to_bytes(&self, mut bytes: &mut [u8]) {
+			fn to_bytes(&self, bytes: &mut [u8]) {
+				assert!(bytes.len() >= self.byte_count());
+				let mut processed_byte_count = 0;
 				for item in self {
-					item.to_bytes(bytes);
-					bytes = &mut bytes[item.byte_count()..];
+					item.to_bytes(&mut bytes[processed_byte_count..]);
+					processed_byte_count += item.byte_count();
 				}
 			}
 			#[inline]
-			fn from_bytes(mut bytes: &[u8]) -> (Self, usize) {
+			fn from_bytes(bytes: &[u8]) -> (Self, usize) {
 				let mut result = Self::default();
-				let mut processed_bytes = 0;
+				let mut processed_byte_count = 0;
 				for i in 0..$count {
-					let (item, item_bytes) = T::from_bytes(bytes);
+					let (item, item_bytes) = T::from_bytes(&bytes[processed_byte_count..]);
 					result[i] = item;
-					bytes = &bytes[item_bytes..];
-					processed_bytes += item_bytes;
+					processed_byte_count += item_bytes;
 				};
-				(result, processed_bytes)
+				(result, processed_byte_count)
 			}
 		}
 	};
@@ -99,24 +102,23 @@ impl<T: ByteSerialize> ByteSerialize for Vec<T> {
 		byte_count
 	}
 
-	fn to_bytes(&self, mut bytes: &mut [u8]) {
+	fn to_bytes(&self, bytes: &mut [u8]) {
+		assert!(bytes.len() >= self.byte_count());
 		self.len().to_bytes(bytes);
-		bytes = &mut bytes[self.len().byte_count()..];
+		let mut processed_byte_count = self.len().byte_count();
 		for item in self {
-			item.to_bytes(bytes);
-			bytes = &mut bytes[item.byte_count()..];
+			item.to_bytes(&mut bytes[processed_byte_count..]);
+			processed_byte_count += item.byte_count();
 		}
 	}
 
-	fn from_bytes(mut bytes: &[u8]) -> (Self, usize) {
+	fn from_bytes(bytes: &[u8]) -> (Self, usize) {
 		let (capacity, mut processed_byte_count) = usize::from_bytes(bytes);
-		bytes = &bytes[processed_byte_count..];
 		let mut result = Self::with_capacity(capacity);
 		for _ in 0..capacity {
-			let (element, additional_byte_count) = T::from_bytes(bytes);
-			processed_byte_count += additional_byte_count;
-			result.push(element);
-			bytes = &bytes[additional_byte_count..];
+			let (item, item_byte_count) = T::from_bytes(&bytes[processed_byte_count..]);
+			result.push(item);
+			processed_byte_count += item_byte_count;
 		}
 		(result, processed_byte_count)
 	}
