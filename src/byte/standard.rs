@@ -1,6 +1,6 @@
 //! Implementations for standard library types.
 
-use super::ByteSerialize;
+use super::{ByteSerialize, SerializationError};
 
 use std::mem::size_of;
 
@@ -14,13 +14,16 @@ macro_rules! impl_byte_serialize_numeric {
 			#[inline]
 			fn to_bytes(&self, bytes: &mut [u8]) {
 				assert!(bytes.len() >= size_of::<Self>());
-				unsafe { *(&mut bytes[0] as *mut _ as *mut _) = (*self).to_le_bytes(); };
+				unsafe { *(bytes.as_mut_ptr() as *mut _) = (*self).to_le_bytes(); };
 			}
 			#[inline]
-			fn from_bytes(bytes: &[u8]) -> (Self, usize) {
-				assert!(bytes.len() >= size_of::<Self>());
-				let result = Self::from_le_bytes(unsafe { *(&bytes[0] as *const _ as *const _) });
-				(result, size_of::<Self>())
+			fn from_bytes(bytes: &[u8]) -> Result<(Self, usize), SerializationError> {
+				if bytes.len() < size_of::<Self>() {
+					Err(SerializationError::BufferOverflow)
+				} else {
+					let result = Self::from_le_bytes(unsafe { *(bytes.as_ptr() as *const _) });
+					Ok((result, size_of::<Self>()))
+				}
 			}
 		}
 	};
@@ -45,8 +48,12 @@ impl ByteSerialize for bool {
 		bytes[0] = *self as u8;
 	}
 	#[inline]
-	fn from_bytes(bytes: &[u8]) -> (Self, usize) {
-		(bytes[0] != 0, 1)
+	fn from_bytes(bytes: &[u8]) -> Result<(Self, usize), SerializationError> {
+		if bytes.len() < 1 {
+			Err(SerializationError::BufferOverflow)
+		} else {
+			Ok((bytes[0] != 0, 1))
+		}
 	}
 }
 
@@ -71,15 +78,15 @@ macro_rules! impl_byte_serialize_generic_array {
 				}
 			}
 			#[inline]
-			fn from_bytes(bytes: &[u8]) -> (Self, usize) {
+			fn from_bytes(bytes: &[u8]) -> Result<(Self, usize), SerializationError> {
 				let mut result = Self::default();
 				let mut processed_byte_count = 0;
 				for i in 0..$count {
-					let (item, item_bytes) = T::from_bytes(&bytes[processed_byte_count..]);
+					let (item, item_bytes) = T::from_bytes(&bytes[processed_byte_count..])?;
 					result[i] = item;
 					processed_byte_count += item_bytes;
 				};
-				(result, processed_byte_count)
+				Ok((result, processed_byte_count))
 			}
 		}
 	};
@@ -112,15 +119,15 @@ impl<T: ByteSerialize> ByteSerialize for Vec<T> {
 		}
 	}
 
-	fn from_bytes(bytes: &[u8]) -> (Self, usize) {
-		let (capacity, mut processed_byte_count) = usize::from_bytes(bytes);
+	fn from_bytes(bytes: &[u8]) -> Result<(Self, usize), SerializationError> {
+		let (capacity, mut processed_byte_count) = usize::from_bytes(bytes)?;
 		let mut result = Self::with_capacity(capacity);
 		for _ in 0..capacity {
-			let (item, item_byte_count) = T::from_bytes(&bytes[processed_byte_count..]);
+			let (item, item_byte_count) = T::from_bytes(&bytes[processed_byte_count..])?;
 			result.push(item);
 			processed_byte_count += item_byte_count;
 		}
-		(result, processed_byte_count)
+		Ok((result, processed_byte_count))
 	}
 }
 
@@ -140,7 +147,7 @@ mod test {
 		// We expect the serialized version to be little-endian.
 		assert_eq!(bytes, [0xEF, 0xBE, 0xAD, 0xDE]);
 
-		let (deserialized, byte_count) = u32::from_bytes(&bytes);
+		let (deserialized, byte_count) = u32::from_bytes(&bytes).unwrap();
 
 		assert_eq!(byte_count, 4);
 		assert_eq!(original, deserialized);
@@ -154,7 +161,7 @@ mod test {
 		assert_eq!(original.byte_count(), 16);
 
 		original.to_bytes(&mut bytes);
-		let (deserialized, byte_count) = <[f32; 4]>::from_bytes(&bytes);
+		let (deserialized, byte_count) = <[f32; 4]>::from_bytes(&bytes).unwrap();
 
 		assert_eq!(byte_count, 16);
 		assert_eq!(original, deserialized);
@@ -173,7 +180,7 @@ mod test {
 		assert_eq!(original.byte_count(), 64);
 
 		original.to_bytes(&mut bytes);
-		let (deserialized, byte_count) = <[[f32; 4]; 4]>::from_bytes(&bytes);
+		let (deserialized, byte_count) = <[[f32; 4]; 4]>::from_bytes(&bytes).unwrap();
 
 		assert_eq!(byte_count, 64);
 		assert_eq!(original, deserialized);
@@ -190,7 +197,7 @@ mod test {
 
 		assert_eq!(bytes, [0x01, 0x00, 0x01, 0xFF]);
 
-		let (deserialized, byte_count) = <[bool; 3]>::from_bytes(&bytes);
+		let (deserialized, byte_count) = <[bool; 3]>::from_bytes(&bytes).unwrap();
 
 		assert_eq!(byte_count, 3);
 		assert_eq!(original, deserialized);
@@ -204,7 +211,7 @@ mod test {
 		assert_eq!(original.byte_count(), 20);
 
 		original.to_bytes(&mut bytes);
-		let (deserialized, byte_count) = <Vec<i32>>::from_bytes(&bytes);
+		let (deserialized, byte_count) = <Vec<i32>>::from_bytes(&bytes).unwrap();
 
 		assert_eq!(byte_count, 20);
 		assert_eq!(original, deserialized);
@@ -218,7 +225,7 @@ mod test {
 		assert_eq!(original.byte_count(), 80);
 
 		original.to_bytes(&mut bytes);
-		let (deserialized, byte_count) = <Vec<Vec<i128>>>::from_bytes(&bytes);
+		let (deserialized, byte_count) = <Vec<Vec<i128>>>::from_bytes(&bytes).unwrap();
 
 		assert_eq!(byte_count, 80);
 		assert_eq!(original, deserialized);

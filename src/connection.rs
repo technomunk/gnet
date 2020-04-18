@@ -1,10 +1,13 @@
 //! Virtual connection with to remote access point.
 
+mod packet;
+
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::Arc;
-use std::string::{ToString};
 
 use std::io::{Error as IoError};
+
+use packet::PacketBuffer;
 
 /// A virtual connection with to remote access point.
 /// 
@@ -12,6 +15,7 @@ use std::io::{Error as IoError};
 pub struct Connection {
 	socket: Arc<UdpSocket>,
 	remote: SocketAddr,
+	packet_buffer: Box<PacketBuffer>,
 }
 
 /// A temporary connection that is in the process of being established for the first time.
@@ -20,6 +24,7 @@ pub struct Connection {
 pub struct PendingConnection {
 	socket: Arc<UdpSocket>,
 	remote: SocketAddr,
+	packet_buffer: Box<PacketBuffer>,
 }
 
 /// An error raised during connection process.
@@ -31,14 +36,21 @@ pub enum ConnectError {
 impl Connection {
 	/// Attempt to establish a connection to provided remote address.
 	pub fn connect(remote: SocketAddr, port: u16, payload: &[u8]) -> Result<PendingConnection, ConnectError> {
-		let socket = Arc::new(UdpSocket::bind(("127.0.0.1:", port))?);
-		// TODO: send initial part of the handshake
-		Ok(PendingConnection{ socket, remote })
+		Connection::connect_with_socket(remote, Arc::new(UdpSocket::bind(("127.0.0.1", port))?), payload)
 	}
 
 	/// Attempt to establish a connection to provided remote address using an existing socket.
 	pub fn connect_with_socket(remote: SocketAddr, socket: Arc<UdpSocket>, payload: &[u8]) -> Result<PendingConnection, ConnectError> {
-		Ok(PendingConnection{ socket, remote })
+		if payload.len() > packet::PAYLOAD_SIZE {
+			Err(ConnectError::PayloadTooLarge)
+		} else {
+			let mut packet_buffer = Box::new(PacketBuffer::default());
+			packet_buffer.write_header();
+			// TODO: fill out header with helper info
+			packet_buffer.write_data(payload);
+			socket.send_to(packet_buffer.as_slice(), remote)?;
+			Ok(PendingConnection{ socket, remote, packet_buffer, })
+		}
 	}
 }
 
