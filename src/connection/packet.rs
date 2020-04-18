@@ -5,7 +5,6 @@ use std::num::Wrapping;
 use std::cmp::{PartialOrd, Ordering};
 
 pub(super) const PAYLOAD_SIZE: usize = 1024;
-pub(super) const CONNECTION_BITS: usize = 24;
 
 const PACKET_SIZE: usize = PAYLOAD_SIZE + size_of::<PacketHeader>();
 
@@ -27,8 +26,7 @@ pub(super) struct PacketIndex(Wrapping<u16>);
 #[derive(Debug, Clone, Copy, Eq)]
 pub(super) struct PacketHeader {
 	pub(super) protocol: ProtocolId,
-	/// Bitfield consisting of CONNECTION_BITS connection identifier and (32 - CONNECTION_BITS) signal bits.
-	pub(super) signal: u32,
+	pub(super) connection_id: u32,
 	pub(super) packet_id: PacketIndex,
 	/// Id of the latest acknowledged packet.
 	pub(super) ack_packet_id: PacketIndex,
@@ -108,7 +106,7 @@ impl PacketHeader {
 	pub(super) fn request_connection(protocol: ProtocolId) -> Self {
 		Self {
 			protocol,
-			signal: 0, // TODO: figure this out
+			connection_id: 0,
 			packet_id: 1.into(),
 			ack_packet_id: 0.into(),
 			ack_packet_mask: 0,
@@ -119,22 +117,6 @@ impl PacketHeader {
 	#[inline]
 	pub(super) fn uses_protocol(&self, protocol: ProtocolId) -> bool {
 		self.protocol == protocol
-	}
-
-	#[inline]
-	pub(super) fn connection_id(&self) -> u32 {
-		self.signal & (!0 >> CONNECTION_BITS)
-	}
-
-	#[inline]
-	pub(super) fn signal(&self) -> u32 {
-		self.signal >> CONNECTION_BITS
-	}
-
-	#[inline]
-	pub(super) fn set_signal(&mut self, signal: u32) {
-		self.signal &= !0 >> CONNECTION_BITS;
-		self.signal |= signal << CONNECTION_BITS;
 	}
 }
 
@@ -149,6 +131,11 @@ impl PacketBuffer {
 	#[inline]
 	pub(super) fn buffer(&self) -> &[u8] {
 		&self.buffer
+	}
+
+	#[inline]
+	pub(super) fn mut_buffer(&mut self) -> &mut [u8] {
+		&mut self.buffer
 	}
 
 	/// Get the slice of the data (payload) buffer.
