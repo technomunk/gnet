@@ -5,17 +5,12 @@ mod connection;
 
 use std::io::{Error as IoError};
 
-pub use packet::ProtocolId;
 pub use connection::{Connection, PendingConnection};
 
 use crate::byte::ByteSerialize;
 
 /// Possible message that is passed by connections.
-pub trait Parcel : ByteSerialize {
-	/// Unique identifier of the user-protocol.
-	/// Network packets using a different protocol will be dropped by the connection automatically.
-	const PROTOCOL_ID: ProtocolId;
-}
+pub trait Parcel : ByteSerialize {}
 
 /// An error raised during connection process.
 pub enum ConnectError {

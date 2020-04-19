@@ -3,20 +3,16 @@
 use std::mem::size_of;
 use std::num::Wrapping;
 use std::cmp::{PartialOrd, Ordering};
+use std::hash::Hasher;
 
 pub(super) const PAYLOAD_SIZE: usize = 1024;
 
 const PACKET_SIZE: usize = PAYLOAD_SIZE + size_of::<PacketHeader>();
 
-/// A unique identifier for user protocol.
-/// Used to filter out any packets that don't include it.
-/// 
-/// *Note: GNet provides minimal safety guarantees, a malicious attacker can send data that looks correct to GNet.
-/// It is up to the application to add further protection against invalid data.*
-pub type ProtocolId = u32;
-
 /// Networked data is preluded with this fixed-size user-data.
 pub type DataPrelude = [u8; 4];
+
+pub(super) type Hash = u32;
 
 /// An identifying index of the packet, used to order packets.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -24,8 +20,9 @@ pub(super) struct PacketIndex(Wrapping<u16>);
 
 /// Header associated with each sent network packet.
 #[derive(Debug, Clone, Copy, Eq)]
+#[repr(C)]
 pub(super) struct PacketHeader {
-	pub(super) protocol: ProtocolId,
+	pub(super) hash: Hash,
 	pub(super) connection_id: u32,
 	pub(super) packet_id: PacketIndex,
 	/// Id of the latest acknowledged packet.
@@ -103,20 +100,15 @@ impl PartialEq for PacketHeader {
 
 impl PacketHeader {
 	#[inline]
-	pub(super) fn request_connection(protocol: ProtocolId) -> Self {
+	pub(super) fn new_request_connection() -> Self {
 		Self {
-			protocol,
+			hash: 0,
 			connection_id: 0,
 			packet_id: 1.into(),
 			ack_packet_id: 0.into(),
 			ack_packet_mask: 0,
 			prelude: [0; 4],
 		}
-	}
-
-	#[inline]
-	pub(super) fn uses_protocol(&self, protocol: ProtocolId) -> bool {
-		self.protocol == protocol
 	}
 }
 
@@ -133,6 +125,7 @@ impl PacketBuffer {
 		&self.buffer
 	}
 
+	/// Get the mutable reference to the internal buffer as a mutable slice.
 	#[inline]
 	pub(super) fn mut_buffer(&mut self) -> &mut [u8] {
 		&mut self.buffer
@@ -157,6 +150,27 @@ impl PacketBuffer {
 	pub(super) fn write_header(&mut self, header: PacketHeader) {
 		debug_assert!(self.buffer.len() >= size_of::<PacketHeader>());
 		unsafe { *(self.buffer.as_mut_ptr() as *mut _) = header }
+	}
+
+	#[inline]
+	pub(super) fn generate_and_write_hash<H: Hasher>(&mut self, hasher: H) {
+		debug_assert!(self.buffer.len() >= size_of::<Hash>());
+		let hash = self.generate_hash(hasher);
+		unsafe { *(self.buffer.as_mut_ptr() as *mut _) = hash }
+	}
+
+	/// Generate the hash associated with data in the buffer.
+	#[inline]
+	pub(super) fn generate_hash<H: Hasher>(&self, mut hasher: H) -> Hash {
+		hasher.write(&self.buffer[size_of::<Hash>()..]);
+		hasher.finish() as Hash
+	}
+
+	/// Read the hash from the buffer.
+	#[inline]
+	pub(super) fn read_hash(&self) -> Hash {
+		debug_assert!(self.buffer.len() >= size_of::<Hash>());
+		unsafe { *(self.buffer.as_ptr() as *const _) }
 	}
 
 	/// Read a header from the internal buffer.
