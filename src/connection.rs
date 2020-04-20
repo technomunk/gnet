@@ -2,6 +2,7 @@
 
 mod packet;
 mod connection;
+mod socket;
 
 use std::io::{Error as IoError};
 

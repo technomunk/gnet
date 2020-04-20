@@ -5,9 +5,11 @@ use std::num::Wrapping;
 use std::cmp::{PartialOrd, Ordering};
 use std::hash::Hasher;
 
+use super::connection::ConnectionId;
+
 pub(super) const PAYLOAD_SIZE: usize = 1024;
 
-const PACKET_SIZE: usize = PAYLOAD_SIZE + size_of::<PacketHeader>();
+pub(super) const PACKET_SIZE: usize = PAYLOAD_SIZE + size_of::<PacketHeader>();
 
 /// Networked data is preluded with this fixed-size user-data.
 pub type DataPrelude = [u8; 4];
@@ -23,7 +25,7 @@ pub(super) struct PacketIndex(Wrapping<u16>);
 #[repr(C)]
 pub(super) struct PacketHeader {
 	pub(super) hash: Hash,
-	pub(super) connection_id: u32,
+	pub(super) connection_id: ConnectionId,
 	pub(super) packet_id: PacketIndex,
 	/// Id of the latest acknowledged packet.
 	pub(super) ack_packet_id: PacketIndex,
@@ -178,5 +180,11 @@ impl PacketBuffer {
 	pub(super) fn read_header(&self) -> PacketHeader {
 		debug_assert!(self.buffer.len() >= size_of::<PacketHeader>());
 		unsafe { *(self.buffer.as_ptr() as *const _) }
+	}
+
+	/// Do initial packet validation on the data in the buffer.
+	#[inline]
+	pub(super) fn validate_packet<H: Hasher>(&self, hasher: H) -> bool {
+		self.generate_hash(hasher) == self.read_hash()
 	}
 }
