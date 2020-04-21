@@ -35,10 +35,7 @@ pub(super) struct PacketHeader {
 	pub(super) prelude: DataPrelude,
 }
 
-/// Structure for processing network packets in a safe manner.
-pub(super) struct PacketBuffer {
-	buffer: Box<[u8]>,
-}
+pub(super) type PacketBuffer = Box<[u8]>;
 
 impl PartialOrd for PacketIndex {
 	#[inline]
@@ -114,77 +111,74 @@ impl PacketHeader {
 	}
 }
 
-impl PacketBuffer {
-	#[inline]
-	pub(super) fn new() -> Self {
-		// TODO: research whether the value is optimized away from the stack.
-		Self { buffer: Box::new([0; PACKET_SIZE]) }
-	}
+/// Create a new packet-buffer.
+#[inline]
+pub(super) fn new_buffer() -> PacketBuffer {
+	Box::new([0; PACKET_SIZE])
+}
 
-	/// Get the reference to the internal buffer as a slice.
-	#[inline]
-	pub(super) fn buffer(&self) -> &[u8] {
-		&self.buffer
-	}
+/// Get the data segment of a packet.
+#[inline]
+pub(super) fn get_data_segment(packet: &[u8]) -> &[u8] {
+	debug_assert!(packet.len() == PACKET_SIZE);
+	&packet[size_of::<PacketHeader>()..]
+}
 
-	/// Get the mutable reference to the internal buffer as a mutable slice.
-	#[inline]
-	pub(super) fn mut_buffer(&mut self) -> &mut [u8] {
-		&mut self.buffer
-	}
+/// Get the mutable data segment of a packet.
+#[inline]
+pub(super) fn get_mut_data_segment(packet: &mut [u8]) -> &mut [u8] {
+	debug_assert!(packet.len() == PACKET_SIZE);
+	&mut packet[size_of::<PacketHeader>()..]
+}
 
-	/// Get the slice of the data (payload) buffer.
-	#[inline]
-	pub(super) fn data_buffer(&self) -> &[u8] {
-		&self.buffer[size_of::<PacketHeader>()..]
-	}
+/// Get the header segment of a packet.
+#[inline]
+pub(super) fn get_header(packet: &[u8]) -> &PacketHeader {
+	debug_assert!(packet.len() == PACKET_SIZE);
+	unsafe { &*(packet.as_ptr() as *const PacketHeader) }
+}
 
-	/// Get the mutable slice of the data (payload) buffer.
-	#[inline]
-	pub(super) fn write_data(&mut self, data: &[u8], offset: usize) {
-		debug_assert!(data.len() + offset <= PAYLOAD_SIZE);
-		let beginning = size_of::<PacketHeader>() + offset;
-		(&mut self.buffer[beginning .. beginning + data.len()]).copy_from_slice(data)
-	}
+/// Write the provided data into the provided packet data segment.
+#[inline]
+pub(super) fn write_data(packet: &mut [u8], data: &[u8], offset: usize) {
+	debug_assert!(packet.len() == PACKET_SIZE);
+	debug_assert!(data.len() + offset <= PAYLOAD_SIZE);
+	let offset = offset + size_of::<PacketHeader>();
+	&packet[offset .. offset + data.len()].copy_from_slice(data);
+}
 
-	/// Write the provided header into the internal buffer.
-	#[inline]
-	pub(super) fn write_header(&mut self, header: PacketHeader) {
-		debug_assert!(self.buffer.len() >= size_of::<PacketHeader>());
-		unsafe { *(self.buffer.as_mut_ptr() as *mut _) = header }
-	}
+/// Write the provided packet header into provided packet.
+#[inline]
+pub(super) fn write_header(packet: &mut [u8], header: PacketHeader) {
+	debug_assert!(packet.len() == PACKET_SIZE);
+	unsafe { *(packet.as_mut_ptr() as *mut PacketHeader) = header }
+}
 
-	#[inline]
-	pub(super) fn generate_and_write_hash<H: Hasher>(&mut self, hasher: H) {
-		debug_assert!(self.buffer.len() >= size_of::<Hash>());
-		let hash = self.generate_hash(hasher);
-		unsafe { *(self.buffer.as_mut_ptr() as *mut _) = hash }
-	}
+/// Generate the hash associated with data in provided packet.
+#[inline]
+pub(super) fn generate_hash<H: Hasher>(packet: &[u8], mut hasher: H) -> Hash {
+	debug_assert!(packet.len() == PACKET_SIZE);
+	hasher.write(&packet[size_of::<Hash>()..]);
+	hasher.finish() as Hash
+}
 
-	/// Generate the hash associated with data in the buffer.
-	#[inline]
-	pub(super) fn generate_hash<H: Hasher>(&self, mut hasher: H) -> Hash {
-		hasher.write(&self.buffer[size_of::<Hash>()..]);
-		hasher.finish() as Hash
-	}
+/// Generate the hash associated with data in provided packet and write it to the packet immediately.
+#[inline]
+pub(super) fn generate_and_write_hash<H: Hasher>(packet: &mut [u8], hasher: H) {
+	debug_assert!(packet.len() == PACKET_SIZE);
+	unsafe { *(packet.as_ptr() as *mut Hash) = generate_hash(packet, hasher) }
+}
 
-	/// Read the hash from the buffer.
-	#[inline]
-	pub(super) fn read_hash(&self) -> Hash {
-		debug_assert!(self.buffer.len() >= size_of::<Hash>());
-		unsafe { *(self.buffer.as_ptr() as *const _) }
-	}
+/// Read the hash from the packet.
+#[inline]
+pub(super) fn read_hash(packet: &[u8]) -> Hash {
+	debug_assert!(packet.len() == PACKET_SIZE);
+	unsafe { *(packet.as_ptr() as *const Hash) }
+}
 
-	/// Read a header from the internal buffer.
-	#[inline]
-	pub(super) fn read_header(&self) -> PacketHeader {
-		debug_assert!(self.buffer.len() >= size_of::<PacketHeader>());
-		unsafe { *(self.buffer.as_ptr() as *const _) }
-	}
-
-	/// Do initial packet validation on the data in the buffer.
-	#[inline]
-	pub(super) fn validate_packet<H: Hasher>(&self, hasher: H) -> bool {
-		self.generate_hash(hasher) == self.read_hash()
-	}
+/// Is the given packet data valid given provided hasher?
+#[inline]
+pub(super) fn valid_hash<H: Hasher>(packet: &[u8], hasher: H) -> bool {
+	debug_assert!(packet.len() == PACKET_SIZE);
+	read_hash(packet) == generate_hash(packet, hasher)
 }

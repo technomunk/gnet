@@ -2,7 +2,7 @@
 
 use super::{ConnectError, Parcel};
 use super::packet;
-use super::packet::{PacketBuffer, PacketHeader};
+use super::packet::{PacketBuffer, PacketHeader, PACKET_SIZE};
 use super::socket::{ClientSocket, Socket, SocketError};
 
 use std::net::{SocketAddr, UdpSocket};
@@ -44,6 +44,7 @@ pub struct Connection<P: Parcel, H: BuildHasher> {
 	connection_id: ConnectionId,
 	remote: SocketAddr,
 	hash_builder: H,
+	packet_buffer: Vec<u8>,
 
 	_message_type: PhantomData<P>,
 }
@@ -55,6 +56,7 @@ pub struct PendingConnection<P: Parcel, H: BuildHasher> {
 	socket: ClientSocket,
 	remote: SocketAddr,
 	hash_builder: H,
+	packet_buffer: Vec<u8>,
 
 	_message_type: PhantomData<P>,
 }
@@ -71,13 +73,13 @@ impl<P: Parcel, H: BuildHasher> Connection<P, H> {
 			Err(ConnectError::PayloadTooLarge)
 		} else {
 			let mut socket = ClientSocket::new(socket)?;
-			socket.packet_buffer.write_header(PacketHeader::new_request_connection());
+			packet::write_header(&mut socket.packet_buffer, PacketHeader::new_request_connection());
 			if payload.len() > 0 {
-				socket.packet_buffer.write_data(payload, 0);
+				packet::write_data(&mut socket.packet_buffer, payload, 0);
 			}
-			socket.packet_buffer.generate_and_write_hash(hash_builder.build_hasher());
-			socket.send_to(remote)?;
-			Ok(PendingConnection{ socket, remote, hash_builder, _message_type: PhantomData })
+			packet::generate_and_write_hash(&mut socket.packet_buffer, hash_builder.build_hasher());
+			socket.send_to(&socket.packet_buffer, remote)?;
+			Ok(PendingConnection{ socket, remote, hash_builder, packet_buffer: Vec::with_capacity(PACKET_SIZE), _message_type: PhantomData })
 		}
 	}
 }
@@ -87,31 +89,26 @@ impl<P: Parcel, H: BuildHasher> PendingConnection<P, H> {
 	/// 
 	/// // TODO: explain the functionality and some of the necessary details 
 	pub fn try_promote<F: FnOnce(&[u8]) -> bool>(mut self, predicate: F) -> Result<Connection<P, H>, PendingConnectionError<P, H>> {
-		// Loop over received messages until finding correct accept message.
-		match self.socket.recv(None, &self.hash_builder) {
-			Ok(_) => {
-				if predicate(self.socket.packet_buffer.data_buffer()) {
+		self.socket.recv_all(&mut self.packet_buffer, None, &self.hash_builder)?;
+		match self.packet_buffer.is_empty() {
+			true => Err(PendingConnectionError::NoAnswer(self)),
+			false => {
+				// TODO: pop the front packet
+				if predicate(&self.packet_buffer[..PACKET_SIZE]) {
+					
 					let connection_id = self.socket.packet_buffer.read_header().connection_id;
 					Ok(Connection{
 						socket: Socket::Client(self.socket),
 						remote: self.remote,
 						hash_builder: self.hash_builder,
 						connection_id,
+						packet_buffer: self.packet_buffer,
 						_message_type: self._message_type,
 					})
 				} else {
 					Err(PendingConnectionError::PredicateFail)
 				}
 			},
-			Err(error) => match error {
-				SocketError::NoPendingPackets => Err(PendingConnectionError::NoAnswer(self)),
-				SocketError::Io(io_error) => match io_error.kind() {
-					IoErrorKind::ConnectionAborted => Err(PendingConnectionError::Rejected),
-					IoErrorKind::ConnectionRefused => Err(PendingConnectionError::Rejected),
-					IoErrorKind::ConnectionReset => Err(PendingConnectionError::Rejected),
-					_ => Err(PendingConnectionError::Io((io_error, self))),
-				},
-			}
 		}
 	}
 }
