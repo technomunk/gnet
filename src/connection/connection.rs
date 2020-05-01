@@ -1,6 +1,6 @@
 //! Connections provide a continuous stream of data as long as they are valid.
 
-use super::{ConnectError, Parcel};
+use super::{ConnectError, Parcel, StableBuildHasher};
 use super::packet;
 use super::packet::{PacketBuffer, PacketHeader, PACKET_SIZE};
 use super::socket::{ClientSocket, Socket, SocketError};
@@ -16,7 +16,7 @@ use std::hash::{BuildHasher, Hasher};
 pub(super) type ConnectionId = u32;
 
 /// An error specific to a pending connection.
-pub enum PendingConnectionError<P: Parcel, H: BuildHasher> {
+pub enum PendingConnectionError<P: Parcel, H: StableBuildHasher> {
 	/// No answer has yet been received.
 	NoAnswer(PendingConnection<P, H>),
 	/// The answer has been received, but it was incorrect.
@@ -36,10 +36,10 @@ pub enum PendingConnectionError<P: Parcel, H: BuildHasher> {
 /// # Generic Parameters
 /// 
 /// - P: [Parcel](trait.Parcel.html) type of passed messages used by this `Connection`.
-/// - H: [BuildHasher](trait.BuildHasher.html) the hasher used to generate a packet hash.
+/// - H: [StableBuildHasher](trait.StableBuildHasher.html) the hasher used to generate a packet hash.
 /// *NOTE: messages with incorrect hash are immediately discarded, meaning both ends of a connection need to have exact same `BuildHasher`.
 /// It is recommended to seed the hasher with a unique secret seed for the application.*
-pub struct Connection<P: Parcel, H: BuildHasher> {
+pub struct Connection<P: Parcel, H: StableBuildHasher> {
 	socket: Socket,
 	connection_id: ConnectionId,
 	remote: SocketAddr,
@@ -52,7 +52,7 @@ pub struct Connection<P: Parcel, H: BuildHasher> {
 /// A temporary connection that is in the process of being established for the first time.
 /// 
 /// Primary purpose is to be promoted to a full connection once established or dropped on timeout.
-pub struct PendingConnection<P: Parcel, H: BuildHasher> {
+pub struct PendingConnection<P: Parcel, H: StableBuildHasher> {
 	socket: ClientSocket,
 	remote: SocketAddr,
 	hash_builder: H,
@@ -61,7 +61,7 @@ pub struct PendingConnection<P: Parcel, H: BuildHasher> {
 	_message_type: PhantomData<P>,
 }
 
-impl<P: Parcel, H: BuildHasher> Connection<P, H> {
+impl<P: Parcel, H: StableBuildHasher> Connection<P, H> {
 	/// Attempt to establish a connection to provided remote address.
 	pub fn connect(remote: SocketAddr, port: u16, hash_builder: H, payload: &[u8]) -> Result<PendingConnection<P, H>, ConnectError> {
 		Connection::connect_with_socket(remote, UdpSocket::bind(("127.0.0.1", port))?, hash_builder, payload)
@@ -84,7 +84,7 @@ impl<P: Parcel, H: BuildHasher> Connection<P, H> {
 	}
 }
 
-impl<P: Parcel, H: BuildHasher> PendingConnection<P, H> {
+impl<P: Parcel, H: StableBuildHasher> PendingConnection<P, H> {
 	/// Attempt to promote the pending connection to a full Connection.
 	/// 
 	/// // TODO: explain the functionality and some of the necessary details 
