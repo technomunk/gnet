@@ -2,14 +2,13 @@
 
 use super::{ConnectError, Parcel, StableBuildHasher};
 use super::packet;
-use super::packet::{PacketBuffer, PacketHeader, PACKET_SIZE};
+use super::packet::{PacketHeader, PACKET_SIZE};
 use super::socket::{ClientSocket, Socket, SocketError};
 
-use std::net::{SocketAddr, UdpSocket};
-use std::sync::Arc;
+use std::io::{Error as IoError};
 use std::marker::PhantomData;
-use std::io::{Error as IoError, ErrorKind as IoErrorKind};
-use std::hash::{BuildHasher, Hasher};
+use std::net::{SocketAddr, UdpSocket};
+use std::time::{Duration, Instant};
 
 
 /// A unique index associated with a connection.
@@ -29,6 +28,24 @@ pub enum PendingConnectionError<P: Parcel, H: StableBuildHasher> {
 	PredicateFail,
 }
 
+/// State of a [Connection](struct.Connection.html).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ConnectionStatus {
+	/// Normal functioning state.
+	/// 
+	/// `Connection`'s full functionality may be used.
+	Open,
+	/// `Connection` has beed deemed lost, due to lack of received relevant network traffic.
+	/// This may be caused by a sudden shutdown of the other end or due to network conditions.
+	/// 
+	/// `Connection` may be demoted to a `PendingConnection` or dropped.
+	Lost,
+	/// `Connection` has been explicitly closed by the other end.
+	/// 
+	/// `Connection` may only be dropped to free system resources.
+	Closed,
+}
+
 /// A virtual connection with to remote access point.
 /// 
 /// This connection is not backed by a stable route (like TCP connections), however it still provides similar functionality.
@@ -45,6 +62,7 @@ pub struct Connection<P: Parcel, H: StableBuildHasher> {
 	remote: SocketAddr,
 	hash_builder: H,
 	packet_buffer: Vec<u8>,
+	status: ConnectionStatus,
 
 	_message_type: PhantomData<P>,
 }
@@ -57,12 +75,14 @@ pub struct PendingConnection<P: Parcel, H: StableBuildHasher> {
 	remote: SocketAddr,
 	hash_builder: H,
 	packet_buffer: Vec<u8>,
+	last_sent_packet_time: Instant,
 
 	_message_type: PhantomData<P>,
 }
 
 impl<P: Parcel, H: StableBuildHasher> Connection<P, H> {
 	/// Attempt to establish a connection to provided remote address.
+	#[inline]
 	pub fn connect(remote: SocketAddr, port: u16, hash_builder: H, payload: &[u8]) -> Result<PendingConnection<P, H>, ConnectError> {
 		Connection::connect_with_socket(remote, UdpSocket::bind(("127.0.0.1", port))?, hash_builder, payload)
 	}
@@ -79,9 +99,28 @@ impl<P: Parcel, H: StableBuildHasher> Connection<P, H> {
 			}
 			packet::generate_and_write_hash(&mut socket.packet_buffer, hash_builder.build_hasher());
 			socket.send_to(&socket.packet_buffer, remote)?;
-			Ok(PendingConnection{ socket, remote, hash_builder, packet_buffer: Vec::with_capacity(PACKET_SIZE), _message_type: PhantomData })
+			Ok(PendingConnection{
+				socket,
+				remote,
+				hash_builder,
+				packet_buffer: Vec::with_capacity(PACKET_SIZE),
+				last_sent_packet_time: Instant::now(),
+				_message_type: PhantomData,
+			})
 		}
 	}
+
+	/// Get the current status (state) of the `Connection`.
+	#[inline]
+	pub fn status(&self) -> ConnectionStatus { self.status }
+
+	/// Checks that the `Connection` is in `Open` (normal) state.
+	/// 
+	/// *Note: this only queries the current status of the connection, the connection may still fail after `is_open()` returned true.*
+	#[inline]
+	pub fn is_open(&self) -> bool { self.status == ConnectionStatus::Open }
+
+	// TODO: add functionality
 }
 
 impl<P: Parcel, H: StableBuildHasher> PendingConnection<P, H> {
@@ -99,15 +138,17 @@ impl<P: Parcel, H: StableBuildHasher> PendingConnection<P, H> {
 			true => Err(PendingConnectionError::NoAnswer(self)),
 			false => {
 				let packet = &self.packet_buffer[..PACKET_SIZE];
-				// TODO: pop the front packet
 				if predicate(packet::get_data_segment(packet)) {
 					let connection_id = packet::get_header(packet).connection_id;
+					// Drop the first packet as it has been processed.
+					self.packet_buffer.drain(..PACKET_SIZE);
 					Ok(Connection{
 						socket: Socket::Client(self.socket),
 						remote: self.remote,
 						hash_builder: self.hash_builder,
 						connection_id,
 						packet_buffer: self.packet_buffer,
+						status: ConnectionStatus::Open,
 						_message_type: self._message_type,
 					})
 				} else {
@@ -115,5 +156,20 @@ impl<P: Parcel, H: StableBuildHasher> PendingConnection<P, H> {
 				}
 			},
 		}
+	}
+
+	/// Get the span of time passed since the last request for the connection has been sent.
+	#[inline]
+	pub fn time_since_last_request(&self) -> Duration {
+		Instant::now().duration_since(self.last_sent_packet_time)
+	}
+
+	/// Update the pending connection.
+	/// 
+	/// - Reads any pending network packets, filtering them.
+	/// - If no packets have been received for half a timeout window re-sends the request.
+	pub fn sync(&mut self) -> Result<(), PendingConnectionError<P, H>> {
+		// TODO: implement
+		Ok(())
 	}
 }
