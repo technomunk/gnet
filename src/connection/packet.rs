@@ -1,4 +1,14 @@
-//! Specifics of sent udp packets.
+//! A packet is an indexable datagram sent over the network (using UDP).
+//! 
+//! Packets consist of 2 parts:
+//! - `Header` with technical information.
+//! - `Payload` with user data.
+//! 
+//! The payload itself may consist of:
+//! - A number of [`Parcel`](../trait.Parcel.html)s
+//! - Part of a data stream.
+//! 
+//! The code in this module is responsible for dealing handling individual packets efficiently.
 
 use std::mem::size_of;
 use std::num::Wrapping;

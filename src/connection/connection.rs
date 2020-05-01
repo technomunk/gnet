@@ -89,14 +89,19 @@ impl<P: Parcel, H: BuildHasher> PendingConnection<P, H> {
 	/// 
 	/// // TODO: explain the functionality and some of the necessary details 
 	pub fn try_promote<F: FnOnce(&[u8]) -> bool>(mut self, predicate: F) -> Result<Connection<P, H>, PendingConnectionError<P, H>> {
-		self.socket.recv_all(&mut self.packet_buffer, None, &self.hash_builder)?;
+		if let Err(error) = self.socket.recv_all(&mut self.packet_buffer, None, &self.hash_builder) {
+			match error {
+				SocketError::Io(error) => return Err(PendingConnectionError::Io((error, self))),
+				SocketError::NoPendingPackets => (),
+			}
+		};
 		match self.packet_buffer.is_empty() {
 			true => Err(PendingConnectionError::NoAnswer(self)),
 			false => {
+				let packet = &self.packet_buffer[..PACKET_SIZE];
 				// TODO: pop the front packet
-				if predicate(&self.packet_buffer[..PACKET_SIZE]) {
-					
-					let connection_id = self.socket.packet_buffer.read_header().connection_id;
+				if predicate(packet::get_data_segment(packet)) {
+					let connection_id = packet::get_header(packet).connection_id;
 					Ok(Connection{
 						socket: Socket::Client(self.socket),
 						remote: self.remote,

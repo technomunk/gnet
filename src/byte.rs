@@ -10,7 +10,10 @@ pub enum SerializationError {
 // TODO: custom #[derive(ByteSerialize)]
 /// A given type can be serialized to and from a byte-stream.
 /// 
-/// `ByteSerialize` is implemented for numeric types, Vecs of `ByteSerialize` types and arrays of sizes 1 through 16 of `ByteSerialize` types.
+/// `ByteSerialize` is implemented by default for:
+/// - Trivial types. (ex: `u8`, `usize`, `float`).
+/// - Arrays of `ByteSerialize + Default` objects up to size 32. (ex: `[f32; 3]`, `[[f32; 4]; 4]`, `[u8; 4]`).
+/// - Tuples of `ByteSerialize` objects. (ex: `(f32, f64, u16)`, `([u16; 4], u16)`, `((i32, isize), usize)`).
 pub trait ByteSerialize : Sized {
 	/// Size of the serialized object in bytes.
 	fn byte_count(&self) -> usize;
