@@ -30,7 +30,7 @@ pub(super) type Hash = u32;
 
 /// An identifying index of the packet, used to order packets.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub(super) struct PacketIndex(Wrapping<u16>);
+pub(super) struct PacketIndex(Wrapping<u8>);
 
 /// Protocol control bitpatterns.
 mod signal {
@@ -41,29 +41,35 @@ mod signal {
 		ConnectionRequest,
 		/// The connection is about to be closed.
 		ConnectionClose,
+		/// This packet need not be acknowledged.
+		Unsynchronized,
 	}
 
 	/// Compacted bitpatterns for signalling protocol-level information.
 	/// 
 	/// Consists of:
-	/// | bit(s) | 31-22      | 21                | 20                 | 19-10           | 9-0          |
-	/// |--------|------------|-------------------|--------------------|-----------------|--------------|
-	/// | value  | `[zeroes]` | connection_closed | connection_request | parcel(s) bytes | stream bytes |
+	/// | bit(s) | 31-25      | 24             | 23                | 22                 | 21-11           | 10-0         |
+	/// |--------|------------|----------------|-------------------|--------------------|-----------------|--------------|
+	/// | value  | `[zeroes]` | unsynchronized | connection_closed | connection_request | parcel(s) bytes | stream bytes |
 	#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-	pub(in crate::connection) struct Protocol(u32);
+	pub(in crate::connection) struct SignalBits(u32);
 
-	pub(in crate::connection) const CONNECTION_REQUEST_BIT: u32 = 1 << 20;
-	pub(in crate::connection) const CONNECTION_CLOSED_BIT: u32 = 1 << 21;
+	pub(in crate::connection) const CONNECTION_REQUEST_BIT: u32 = 1 << 22;
+	pub(in crate::connection) const CONNECTION_CLOSED_BIT: u32 = 1 << 23;
+	pub(in crate::connection) const UNSYNCHRONIZED_BIT: u32 = 1 << 24;
+	
+	const SIZE_BITS: u32 = 0x7FF;
 
-	impl Protocol {
+	impl SignalBits {
 		/// Sets the signal flags associated with given signal.
 		/// 
 		/// To read the flag use [`is_set`](struct.Protocol.html#method.is_signal_set) method.
 		#[inline]
-		pub(super) fn set_signal(&mut self, signal: Signal) {
+		pub(in crate::connection) fn set_signal(&mut self, signal: Signal) {
 			match signal {
 				Signal::ConnectionRequest => self.0 |= CONNECTION_REQUEST_BIT,
 				Signal::ConnectionClose => self.0 |= CONNECTION_CLOSED_BIT,
+				Signal::Unsynchronized => self.0 |= UNSYNCHRONIZED_BIT,
 			}
 		}
 	
@@ -71,10 +77,11 @@ mod signal {
 		/// 
 		/// To read the flag use [`is_set`](struct.Protocol.html#method.is_signal_set) method.
 		#[inline]
-		pub(super) fn clear_signal(&mut self, signal: Signal) {
+		pub(in crate::connection) fn clear_signal(&mut self, signal: Signal) {
 			match signal {
 				Signal::ConnectionRequest => self.0 &= !CONNECTION_REQUEST_BIT,
 				Signal::ConnectionClose => self.0 &= !CONNECTION_CLOSED_BIT,
+				Signal::Unsynchronized => self.0 &= !UNSYNCHRONIZED_BIT,
 			}
 		}
 	
@@ -82,27 +89,66 @@ mod signal {
 		/// 
 		/// The flags are set with [`set_signal`](struct.Protocol.html#method.set_signal) and cleared with [`clear_signal`](struct.Protocol.html#method.clear_signal) methods.
 		#[inline]
-		pub(super) fn is_signal_set(&self, signal: Signal) -> bool {
+		pub(in crate::connection) fn is_signal_set(&self, signal: Signal) -> bool {
 			match signal {
 				Signal::ConnectionRequest => (self.0 & CONNECTION_REQUEST_BIT) == CONNECTION_REQUEST_BIT,
 				Signal::ConnectionClose => (self.0 & CONNECTION_CLOSED_BIT) == CONNECTION_CLOSED_BIT,
+				Signal::Unsynchronized => (self. 0 & UNSYNCHRONIZED_BIT) == UNSYNCHRONIZED_BIT,
 			}
+		}
+
+		/// Set the byte-count of the parcel portion of the packet to given value.
+		#[inline]
+		pub(in crate::connection) fn set_parcel_size(&mut self, len: u16) {
+			debug_assert_eq!(len & SIZE_BITS as u16, len);
+			self.0 = (self.0 & !(SIZE_BITS << 11)) | ((len as u32) << 11);
+		}
+
+		/// Set the byte-count of the stream portion of the packet to given value.
+		#[inline]
+		pub(in crate::connection) fn set_stream_size(&mut self, len: u16) {
+			debug_assert_eq!(len & SIZE_BITS as u16, len);
+			self.0 = (self.0 & !SIZE_BITS) | len as u32;
 		}
 	
 		/// Create a *KeepAlive* protocol bitpattern.
 		/// 
 		/// KeepAlive packets contain no payload, they simply signal update the connection timing.
 		#[inline]
-		pub(super) fn keep_alive() -> Self { Self(0) }
+		pub(in crate::connection) fn keep_alive() -> Self { Self(UNSYNCHRONIZED_BIT) }
 	
 		/// Create a bitpattern associated with a connection request.
 		#[inline]
-		pub(super) fn request_connection(payload_size: u16) -> Self {
-			// Since the payload size is passed from library code, this should be safe.
-			debug_assert_eq!(payload_size & 0x3F, payload_size);
-			Self(CONNECTION_REQUEST_BIT | (payload_size & 0x3F) as u32)
+		pub(in crate::connection) fn request_connection(payload_len: u16) -> Self {
+			// Since the payload length is passed from library code, this should be safe.
+			debug_assert_eq!(payload_len & SIZE_BITS as u16, payload_len);
+			Self(CONNECTION_REQUEST_BIT | payload_len as u32)
 		}
 
+		/// Create a bitpattern associated with an unsynchronized (volatile) packet with given parcel length.
+		#[inline]
+		pub(in crate::connection) fn unsynchronized(parcel_len: u16) -> Self {
+			// Since the parcel length is passed from library code, this should be safe.
+			debug_assert_eq!(parcel_len & SIZE_BITS as u16, parcel_len);
+			Self(UNSYNCHRONIZED_BIT | ((parcel_len as u32) << 11))
+		}
+	}
+
+	#[cfg(test)]
+	mod test {
+		use super::*;
+
+		#[test]
+		fn set_sizes_are_correct() {
+			let mut bits = SignalBits::unsynchronized(1024);
+
+			assert_eq!(bits.0, 0x0120_0000);
+
+			bits.set_stream_size(11);
+			bits.set_parcel_size(256);
+
+			assert_eq!(bits.0, 0x0108000B);
+		}
 	}
 }
 
@@ -113,12 +159,12 @@ pub(super) struct PacketHeader {
 	pub(super) hash: Hash,
 	pub(super) connection_id: ConnectionId,
 	/// Consists of multiple components. See [`Protocol`](struct.Protocol.html) for details.
-	pub(super) protocol: Protocol,
 	pub(super) packet_id: PacketIndex,
 	/// Id of the latest acknowledged packet.
 	pub(super) ack_packet_id: PacketIndex,
 	/// Bitmask of 32 acks for preceding packets (32 packets before `ack_packet_id`).
-	pub(super) ack_packet_mask: u32,
+	pub(super) ack_packet_mask: u64,
+	pub(super) signal: SignalBits,
 	/// User-provided prelude,
 	pub(super) prelude: DataPrelude,
 }
@@ -137,15 +183,15 @@ impl Ord for PacketIndex {
 	fn cmp(&self, other: &Self) -> Ordering {
 		match self.0 - other.0 {
 			Wrapping(0) => Ordering::Equal,
-			x if x.0 < std::u16::MAX / 2 => Ordering::Greater,
+			x if x.0 < std::u8::MAX / 2 => Ordering::Greater,
 			_ => Ordering::Less,
 		}
 	}
 }
 
-impl From<u16> for PacketIndex {
+impl From<u8> for PacketIndex {
 	#[inline]
-	fn from(item: u16) -> Self {
+	fn from(item: u8) -> Self {
 		Self(Wrapping(item))
 	}
 }
@@ -159,8 +205,8 @@ impl PacketIndex {
 
 	/// Get the number of indices between to and from (to - from).
 	#[inline]
-	pub(super) fn distance(to: Self, from: Self) -> u16 {
-		to.0 .0 - from.0 .0
+	pub(super) fn distance(to: Self, from: Self) -> u8 {
+		(to.0 - from.0).0
 	}
 }
 
@@ -192,11 +238,27 @@ impl PacketHeader {
 		Self {
 			hash: 0,
 			connection_id: 0,
-			protocol: Protocol::request_connection(payload_size),
-			packet_id: 1.into(),
+			signal: SignalBits::request_connection(payload_size),
+			packet_id: 0.into(),
 			ack_packet_id: 0.into(),
 			ack_packet_mask: 0,
 			prelude: [0; 4],
+		}
+	}
+
+	/// Checks whether the header acknowledges provided packet id.
+	#[inline]
+	pub(super) fn acknowledges(&self, packet_id: PacketIndex) -> bool {
+		match self.signal.is_signal_set(Signal::ConnectionRequest) {
+			true => false,
+			false => match PacketIndex::distance(self.ack_packet_id, packet_id) {
+				0 => self.ack_packet_id == packet_id,
+				x if x <= 64 => {
+					let packet_bit = 1 << (x - 1);
+					(self.ack_packet_mask & packet_bit) == packet_bit
+				},
+				_ => false,
+			}
 		}
 	}
 }
@@ -271,4 +333,54 @@ pub(super) fn read_hash(packet: &[u8]) -> Hash {
 pub(super) fn valid_hash<H: Hasher>(packet: &[u8], hasher: H) -> bool {
 	debug_assert!(packet.len() == PACKET_SIZE);
 	read_hash(packet) == generate_hash(packet, hasher)
+}
+
+#[cfg(test)]
+mod test {
+	use super::*;
+
+	#[test]
+	fn packet_index_order_is_correct() {
+		let smaller: PacketIndex = 0.into();
+		let greater: PacketIndex = 1.into();
+
+		assert!(smaller < greater);
+
+		let smaller: PacketIndex = 200.into();
+		let greater: PacketIndex = 1.into();
+
+		assert!(smaller < greater);
+
+		let smaller: PacketIndex = 60.into();
+		let greater: PacketIndex = 180.into();
+
+		assert!(smaller < greater);
+	}
+
+	#[test]
+	fn packet_header_acknowledgement_is_correct() {
+		let mut header = PacketHeader::request_connection(0);
+		
+		header.ack_packet_id = 17.into();
+		header.ack_packet_mask = 7 << 14;
+
+		assert_eq!(header.acknowledges(17.into()), false);
+
+		header.signal.clear_signal(Signal::ConnectionRequest);
+		
+		assert_eq!(header.acknowledges(17.into()), true);
+		assert_eq!(header.acknowledges(0.into()), true);
+		assert_eq!(header.acknowledges(1.into()), true);
+		assert_eq!(header.acknowledges(2.into()), true);
+
+		assert_eq!(header.acknowledges(3.into()), false);
+		assert_eq!(header.acknowledges(16.into()), false);
+		assert_eq!(header.acknowledges(18.into()), false);
+	}
+
+	#[test]
+	fn sizes_are_as_expected() {
+		assert_eq!(std::mem::size_of::<PacketHeader>(), 24);
+		assert_eq!(PACKET_SIZE, 1048);
+	}
 }

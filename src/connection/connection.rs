@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 
 /// A unique index associated with a connection.
-pub(super) type ConnectionId = u32;
+pub(super) type ConnectionId = u16;
 
 /// An error during the operation of a [`Connection`](struct.Connection.html).
 #[derive(Debug)]
