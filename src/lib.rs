@@ -2,4 +2,3 @@
 
 pub mod byte;
 pub mod connection;
-pub mod message;

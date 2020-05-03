@@ -1,10 +1,13 @@
 //! Connections provide a continuous stream of data as long as they are valid.
 
+use crate::byte::{ByteSerialize, SerializationError};
+
 use super::{ConnectError, Parcel, StableBuildHasher};
 use super::packet;
 use super::packet::{PacketHeader, PACKET_SIZE};
 use super::socket::{ClientSocket, Socket, SocketError};
 
+use std::error::Error;
 use std::io::{Error as IoError};
 use std::marker::PhantomData;
 use std::net::{SocketAddr, UdpSocket};
@@ -14,7 +17,21 @@ use std::time::{Duration, Instant};
 /// A unique index associated with a connection.
 pub(super) type ConnectionId = u32;
 
+/// An error during the operation of a [`Connection`](struct.Connection.html).
+#[derive(Debug)]
+pub enum ConnectionError {
+	/// The connection has no pending parcels to pop.
+	NoPendingParcels,
+	/// An error during deserialization of a parcel.
+	Serialization(SerializationError),
+	/// The connection was in an invalid state.
+	InvalidState,
+	/// An unexpected IO error ocurred.
+	Io(IoError),
+}
+
 /// An error specific to a pending connection.
+#[derive(Debug)]
 pub enum PendingConnectionError<P: Parcel, H: StableBuildHasher> {
 	/// No answer has yet been received.
 	NoAnswer(PendingConnection<P, H>),
@@ -63,6 +80,8 @@ pub struct Connection<P: Parcel, H: StableBuildHasher> {
 	hash_builder: H,
 	packet_buffer: Vec<u8>,
 	status: ConnectionStatus,
+	last_sent_packet_time: Instant,
+	last_received_packet_time: Instant,
 
 	_message_type: PhantomData<P>,
 }
@@ -70,6 +89,7 @@ pub struct Connection<P: Parcel, H: StableBuildHasher> {
 /// A temporary connection that is in the process of being established for the first time.
 /// 
 /// Primary purpose is to be promoted to a full connection once established or dropped on timeout.
+#[derive(Debug)]
 pub struct PendingConnection<P: Parcel, H: StableBuildHasher> {
 	socket: ClientSocket,
 	remote: SocketAddr,
@@ -78,6 +98,27 @@ pub struct PendingConnection<P: Parcel, H: StableBuildHasher> {
 	last_sent_packet_time: Instant,
 
 	_message_type: PhantomData<P>,
+}
+
+impl std::fmt::Display for ConnectionError {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			ConnectionError::NoPendingParcels => write!(f, "no pending parcels to pop"),
+			ConnectionError::InvalidState => write!(f, "the connection was in an invalid state for given operation"),
+			ConnectionError::Serialization(error) => error.fmt(f),
+			ConnectionError::Io(error) => error.fmt(f),
+		}
+	}
+}
+
+impl Error for ConnectionError {
+	fn source(&self) -> Option<&(dyn Error + 'static)> {
+		match self {
+			ConnectionError::Serialization(error) => Some(error as &dyn Error),
+			ConnectionError::Io(error) => Some(error as &dyn Error),
+			_ => None,
+		}
+	}
 }
 
 impl<P: Parcel, H: StableBuildHasher> Connection<P, H> {
@@ -93,7 +134,7 @@ impl<P: Parcel, H: StableBuildHasher> Connection<P, H> {
 			Err(ConnectError::PayloadTooLarge)
 		} else {
 			let mut socket = ClientSocket::new(socket)?;
-			packet::write_header(&mut socket.packet_buffer, PacketHeader::new_request_connection());
+			packet::write_header(&mut socket.packet_buffer, PacketHeader::request_connection(payload.len() as u16));
 			if payload.len() > 0 {
 				packet::write_data(&mut socket.packet_buffer, payload, 0);
 			}
@@ -120,13 +161,97 @@ impl<P: Parcel, H: StableBuildHasher> Connection<P, H> {
 	#[inline]
 	pub fn is_open(&self) -> bool { self.status == ConnectionStatus::Open }
 
-	// TODO: add functionality
+	/// Get the next parcel from the connection.
+	/// 
+	/// Includes the data prelude from the network packet the parcel was transmitted with.
+	/// 
+	/// Will query the socket, pop any pending network packets and finally pop a parcel.
+	pub fn pop_parcel(&mut self) -> Result<(P, [u8; 4]), ConnectionError> {
+		unimplemented!("Connection functionality is under development")
+	}
+
+	/// Begin reliable transmission of provided parcel.
+	/// 
+	/// Reliable parcels are guaranteed to be delivered as long as the connection is in a valid state.
+	/// The order of delivery is not guaranteed however, for order-dependent functionality use streams.
+	/// 
+	/// # Notes
+	/// - May result in network packet dispatch.
+	pub fn push_reliable_parcel(&mut self, parcel: P) -> Result<(), ConnectionError> {
+		unimplemented!("Connection functionality is under development")
+	}
+
+	/// Begin unreliable transmission of provided parcel.
+	/// 
+	/// Unreliable (volatile) parcels are delivered in a best-effort manner, however no re-transmission occurs of the parcel was not received by the other end.
+	/// The order of delivery is not guaranteed, for order-dependent functionality use streams.
+	/// 
+	/// # Notes
+	/// - May result in network packet dispatch.
+	pub fn push_volatile_parcel(&mut self, parcel: P) -> Result<(), ConnectionError> {
+		unimplemented!("Connection functionality is under development")
+	}
+
+	/// Write a given slice of bytes to the connection stream.
+	/// 
+	/// # Streams
+	/// Connection streams offer [TCP](https://en.wikipedia.org/wiki/Transmission_Control_Protocol)-like functionality for contiguous streams of data.
+	/// Streams are transmitted with the same network packets as reliable parcels, reducing overall data duplication for lost packets.
+	/// 
+	/// # Notes
+	/// - May result in network packet dispatch.
+	pub fn write_bytes_to_stream(&mut self, bytes: &[u8]) -> Result<(), ConnectionError> {
+		unimplemented!("Connection functionality is under development")
+	}
+
+	/// Write a given byte-serializeable item to the connection stream.
+	/// 
+	/// # Returns
+	/// Number of bytes written.
+	/// 
+	/// # Streams
+	/// Connection streams offer [TCP](https://en.wikipedia.org/wiki/Transmission_Control_Protocol)-like functionality for contiguous streams of data.
+	/// Streams are transmitted with the same network packets as reliable parcels, reducing overall data duplication for lost packets.
+	/// 
+	/// # Notes
+	/// - May result in network packet dispatch.
+	pub fn write_item_to_stream<B: ByteSerialize>(&mut self, item: &B) -> Result<usize, ConnectionError> {
+		unimplemented!("Connection functionality is under development")
+	}
+
+	/// Attempt to read data from the connection stream into the provided buffer.
+	/// 
+	/// # Returns
+	/// Number of bytes read.
+	/// 
+	/// # Streams
+	/// Connection streams offer [TCP](https://en.wikipedia.org/wiki/Transmission_Control_Protocol)-like functionality for contiguous streams of data.
+	/// Streams are transmitted with the same network packets as reliable parcels, reducing overall data duplication for lost packets.
+	/// 
+	/// # Notes
+	/// - Will not read past the end of the provided buffer.
+	pub fn read_from_stream(&mut self, buffer: &mut [u8]) -> Result<usize, ConnectionError> {
+		unimplemented!("Connection functionality is under development")
+	}
+
+	/// Query the amount of bytes ready to be read from the incoming stream.
+	/// 
+	/// # Streams
+	/// Connection streams offer [TCP](https://en.wikipedia.org/wiki/Transmission_Control_Protocol)-like functionality for contiguous streams of data.
+	/// Streams are transmitted with the same network packets as reliable parcels, reducing overall data duplication for lost packets.
+	/// 
+	/// # Notes
+	/// - Does not do synchronization that [`read_from_stream()`](struct.Connection.html#method.read_from_stream) performs, as a result there may be more bytes ready to be read than returned.
+	pub fn pending_incoming_stream_bytes(&self) -> Result<usize, ConnectionError> {
+		unimplemented!("Connection functionality is under development")
+	}
 }
 
 impl<P: Parcel, H: StableBuildHasher> PendingConnection<P, H> {
 	/// Attempt to promote the pending connection to a full Connection.
 	/// 
-	/// // TODO: explain the functionality and some of the necessary details 
+	/// Receives any pending network packets, supplying their payload to provided predicate.
+	/// If the predicate returns true promotes to full [`Connection`](struct.Connection.html) in [`ConnectionStatus::Open`](enum.ConnectionStatus.html) state.
 	pub fn try_promote<F: FnOnce(&[u8]) -> bool>(mut self, predicate: F) -> Result<Connection<P, H>, PendingConnectionError<P, H>> {
 		if let Err(error) = self.socket.recv_all(&mut self.packet_buffer, None, &self.hash_builder) {
 			match error {
@@ -149,6 +274,9 @@ impl<P: Parcel, H: StableBuildHasher> PendingConnection<P, H> {
 						connection_id,
 						packet_buffer: self.packet_buffer,
 						status: ConnectionStatus::Open,
+						last_sent_packet_time: self.last_sent_packet_time,
+						last_received_packet_time: Instant::now(),
+
 						_message_type: self._message_type,
 					})
 				} else {

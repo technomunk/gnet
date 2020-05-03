@@ -1,4 +1,7 @@
-//! Traits for representing types as individual bytes.
+//! Byte-serialization trait.
+
+use std::error::Error;
+use std::fmt::{Display, Formatter, Result as FmtResult};
 
 /// An error occurring during byte-serialization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd)]
@@ -28,3 +31,11 @@ pub trait ByteSerialize : Sized {
 }
 
 mod standard;
+
+impl Display for SerializationError {
+	fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+		write!(f, "serialization would cause buffer overflow")
+	}
+}
+
+impl Error for SerializationError {}

@@ -1,26 +1,35 @@
 //! Special UdpSocket wrapper that demultiplexes multiple connections.
 
-use std::net::{SocketAddr, UdpSocket};
 use std::collections::HashMap;
+use std::error::Error;
+use std::net::{SocketAddr, UdpSocket};
 use std::io::{Error as IoError, ErrorKind as IoErrorKind};
-use std::hash::{BuildHasher, Hasher};
 use std::sync::Mutex;
 
 use super::connection::ConnectionId;
 use super::packet;
 use super::packet::{PacketBuffer, PACKET_SIZE};
+use super::StableBuildHasher;
 
+/// An error associated with a socket.
+#[derive(Debug)]
 pub(super) enum SocketError {
 	/// Ie WouldBlock
 	NoPendingPackets,
 	Io(IoError),
 }
 
+/// A client-side socket.
+#[derive(Debug)]
 pub(super) struct ClientSocket {
 	socket: UdpSocket,
 	pub(super) packet_buffer: PacketBuffer,
 }
 
+/// A server-side socket.
+/// 
+/// Buffers incoming packets per-connection, supplying only connection-specific data.
+#[derive(Debug)]
 pub(super) struct ServerSocket {
 	socket: UdpSocket,
 	pub(super) packet_buffer: PacketBuffer,
@@ -28,9 +37,29 @@ pub(super) struct ServerSocket {
 }
 
 /// A socket backed by either server or client version.
+#[derive(Debug)]
 pub(super) enum Socket {
 	Client(ClientSocket),
 	Server(Mutex<ServerSocket>),
+}
+
+impl std::fmt::Display for SocketError {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			SocketError::NoPendingPackets => write!(f, "no pending packets"),
+			SocketError::Io(error) => error.fmt(f)
+		}
+	}
+}
+
+impl Error for SocketError {
+	#[inline]
+	fn source(&self) -> Option<&(dyn Error + 'static)> {
+		match self {
+			SocketError::NoPendingPackets => None,
+			SocketError::Io(error) => Some(error as &dyn Error),
+		}
+	}
 }
 
 impl From<IoError> for SocketError {
@@ -52,7 +81,7 @@ impl ClientSocket {
 	}
 
 	/// Receive any pending packets optionally filtered by connection id.
-	pub(super) fn recv_all<H: BuildHasher>(&mut self, buffer: &mut Vec<u8>, connection_id: Option<ConnectionId>, hash_builder: &H,) -> Result<usize, SocketError> {
+	pub(super) fn recv_all<H: StableBuildHasher>(&mut self, buffer: &mut Vec<u8>, connection_id: Option<ConnectionId>, hash_builder: &H) -> Result<usize, SocketError> {
 		let mut received_bytes = 0;
 		loop {
 			match self.socket.recv_from(&mut self.packet_buffer) {
@@ -91,7 +120,7 @@ impl ClientSocket {
 
 impl ServerSocket {
 	/// Receive any pending packets for a provided connection id.
-	pub(super) fn recv_all<H: BuildHasher>(&mut self, buffer: &mut Vec<u8>, connection_id: ConnectionId, hash_builder: &H) -> Result<usize, SocketError> {
+	pub(super) fn recv_all<H: StableBuildHasher>(&mut self, buffer: &mut Vec<u8>, connection_id: ConnectionId, hash_builder: &H) -> Result<usize, SocketError> {
 		loop {
 			match self.socket.recv(&mut self.packet_buffer) {
 				Ok(packet_size) => {
@@ -138,7 +167,7 @@ impl Socket {
 		Ok(())
 	}
 
-	pub(super) fn recv_all<H: BuildHasher>(&mut self, buffer: &mut Vec<u8>, connection_id: ConnectionId, hash_builder: &H) -> Result<(), SocketError> {
+	pub(super) fn recv_all<H: StableBuildHasher>(&mut self, buffer: &mut Vec<u8>, connection_id: ConnectionId, hash_builder: &H) -> Result<(), SocketError> {
 		match self {
 			Self::Client(client) => client.recv_all(buffer, Some(connection_id), hash_builder)?,
 			Self::Server(server) => server.lock().unwrap().recv_all(buffer, connection_id, hash_builder)?,
