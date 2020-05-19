@@ -83,6 +83,12 @@ pub struct Connection<P: Parcel, H: StableBuildHasher> {
 	last_sent_packet_time: Instant,
 	last_received_packet_time: Instant,
 
+	sent_packet_buffer: Vec<(Instant, [u8; packet::PACKET_SIZE])>,
+	// TODO: connection-accept should be a synchronized packet with id 0.
+	// TODO: connection-request should be a synchronized packet with id 0.
+	received_packet_ack_id: packet::PacketIndex,
+	received_packet_ack_mask: u64,
+
 	_message_type: PhantomData<P>,
 }
 
@@ -276,6 +282,10 @@ impl<P: Parcel, H: StableBuildHasher> PendingConnection<P, H> {
 						status: ConnectionStatus::Open,
 						last_sent_packet_time: self.last_sent_packet_time,
 						last_received_packet_time: Instant::now(),
+
+						sent_packet_buffer: Vec::with_capacity(65),
+						received_packet_ack_id: 0.into(),
+						received_packet_ack_mask: 0,
 
 						_message_type: self._message_type,
 					})

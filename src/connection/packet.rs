@@ -41,22 +41,22 @@ mod signal {
 		ConnectionRequest,
 		/// The connection is about to be closed.
 		ConnectionClose,
-		/// This packet need not be acknowledged.
-		Unsynchronized,
+		/// This packet's id field is valid and should be acknowledged.
+		Synchronized,
 	}
 
 	/// Compacted bitpatterns for signalling protocol-level information.
 	/// 
 	/// Consists of:
-	/// | bit(s) | 31-25      | 24             | 23                | 22                 | 21-11           | 10-0         |
-	/// |--------|------------|----------------|-------------------|--------------------|-----------------|--------------|
-	/// | value  | `[zeroes]` | unsynchronized | connection_closed | connection_request | parcel(s) bytes | stream bytes |
+	/// | bit(s) | 31-25      | 24           | 23                | 22                 | 21-11           | 10-0         |
+	/// |--------|------------|--------------|-------------------|--------------------|-----------------|--------------|
+	/// | value  | `[zeroes]` | synchronized | connection_closed | connection_request | parcel(s) bytes | stream bytes |
 	#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 	pub(in crate::connection) struct SignalBits(u32);
 
 	pub(in crate::connection) const CONNECTION_REQUEST_BIT: u32 = 1 << 22;
 	pub(in crate::connection) const CONNECTION_CLOSED_BIT: u32 = 1 << 23;
-	pub(in crate::connection) const UNSYNCHRONIZED_BIT: u32 = 1 << 24;
+	pub(in crate::connection) const SYNCHRONIZED_BIT: u32 = 1 << 24;
 	
 	const SIZE_BITS: u32 = 0x7FF;
 
@@ -69,7 +69,7 @@ mod signal {
 			match signal {
 				Signal::ConnectionRequest => self.0 |= CONNECTION_REQUEST_BIT,
 				Signal::ConnectionClose => self.0 |= CONNECTION_CLOSED_BIT,
-				Signal::Unsynchronized => self.0 |= UNSYNCHRONIZED_BIT,
+				Signal::Synchronized => self.0 |= SYNCHRONIZED_BIT,
 			}
 		}
 	
@@ -81,7 +81,7 @@ mod signal {
 			match signal {
 				Signal::ConnectionRequest => self.0 &= !CONNECTION_REQUEST_BIT,
 				Signal::ConnectionClose => self.0 &= !CONNECTION_CLOSED_BIT,
-				Signal::Unsynchronized => self.0 &= !UNSYNCHRONIZED_BIT,
+				Signal::Synchronized => self.0 &= !SYNCHRONIZED_BIT,
 			}
 		}
 	
@@ -93,7 +93,7 @@ mod signal {
 			match signal {
 				Signal::ConnectionRequest => (self.0 & CONNECTION_REQUEST_BIT) == CONNECTION_REQUEST_BIT,
 				Signal::ConnectionClose => (self.0 & CONNECTION_CLOSED_BIT) == CONNECTION_CLOSED_BIT,
-				Signal::Unsynchronized => (self. 0 & UNSYNCHRONIZED_BIT) == UNSYNCHRONIZED_BIT,
+				Signal::Synchronized => (self. 0 & SYNCHRONIZED_BIT) == SYNCHRONIZED_BIT,
 			}
 		}
 
@@ -115,22 +115,30 @@ mod signal {
 		/// 
 		/// KeepAlive packets contain no payload, they simply signal update the connection timing.
 		#[inline]
-		pub(in crate::connection) fn keep_alive() -> Self { Self(UNSYNCHRONIZED_BIT) }
+		pub(in crate::connection) fn keep_alive() -> Self { Self(0) }
 	
 		/// Create a bitpattern associated with a connection request.
 		#[inline]
 		pub(in crate::connection) fn request_connection(payload_len: u16) -> Self {
 			// Since the payload length is passed from library code, this should be safe.
 			debug_assert_eq!(payload_len & SIZE_BITS as u16, payload_len);
-			Self(CONNECTION_REQUEST_BIT | payload_len as u32)
+			Self(SYNCHRONIZED_BIT | CONNECTION_REQUEST_BIT | payload_len as u32)
 		}
 
-		/// Create a bitpattern associated with an unsynchronized (volatile) packet with given parcel length.
+		/// Create a bitpattern associated with an volatile (unsynchronized) packet with given parcel length.
 		#[inline]
-		pub(in crate::connection) fn unsynchronized(parcel_len: u16) -> Self {
+		pub(in crate::connection) fn volatile(parcel_len: u16) -> Self {
 			// Since the parcel length is passed from library code, this should be safe.
 			debug_assert_eq!(parcel_len & SIZE_BITS as u16, parcel_len);
-			Self(UNSYNCHRONIZED_BIT | ((parcel_len as u32) << 11))
+			Self((parcel_len as u32) << 11)
+		}
+
+		/// Create a bitpattern associated with a synchronized packet with given parcel and stream lengths.
+		#[inline]
+		pub(in crate::connection) fn synchronized(parcel_len: u16, stream_len: u16) -> Self {
+			debug_assert_eq!(parcel_len & SIZE_BITS as u16, parcel_len);
+			debug_assert_eq!(stream_len & SIZE_BITS as u16, stream_len);
+			Self(SYNCHRONIZED_BIT | ((parcel_len as u32) << 11) | stream_len as u32)
 		}
 	}
 
@@ -140,14 +148,14 @@ mod signal {
 
 		#[test]
 		fn set_sizes_are_correct() {
-			let mut bits = SignalBits::unsynchronized(1024);
+			let mut bits = SignalBits::volatile(1024);
 
-			assert_eq!(bits.0, 0x0120_0000);
+			assert_eq!(bits.0, 0x0020_0000);
 
 			bits.set_stream_size(11);
 			bits.set_parcel_size(256);
 
-			assert_eq!(bits.0, 0x0108000B);
+			assert_eq!(bits.0, 0x0008000B);
 		}
 	}
 }
@@ -162,7 +170,7 @@ pub(super) struct PacketHeader {
 	pub(super) packet_id: PacketIndex,
 	/// Id of the latest acknowledged packet.
 	pub(super) ack_packet_id: PacketIndex,
-	/// Bitmask of 32 acks for preceding packets (32 packets before `ack_packet_id`).
+	/// Bitmask of 64 acks for preceding packets (64 packets before `ack_packet_id`).
 	pub(super) ack_packet_mask: u64,
 	pub(super) signal: SignalBits,
 	/// User-provided prelude,
@@ -247,7 +255,6 @@ impl PacketHeader {
 	}
 
 	/// Checks whether the header acknowledges provided packet id.
-	#[inline]
 	pub(super) fn acknowledges(&self, packet_id: PacketIndex) -> bool {
 		match self.signal.is_signal_set(Signal::ConnectionRequest) {
 			true => false,
