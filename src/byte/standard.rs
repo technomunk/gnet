@@ -50,7 +50,7 @@ impl ByteSerialize for bool {
 	}
 	#[inline]
 	fn from_bytes(bytes: &[u8]) -> Result<(Self, usize), SerializationError> {
-		if bytes.len() < 1 {
+		if bytes.is_empty() {
 			Err(SerializationError::BufferOverflow)
 		} else {
 			Ok((bytes[0] != 0, 1))
@@ -157,7 +157,7 @@ mod test {
 
 	#[test]
 	fn u32_serializes() {
-		let original: u32 = 0xDEADBEEF;
+		let original: u32 = 0xDEAD_BEEF;
 		let mut bytes = [0; 4];
 
 		assert_eq!(original.byte_count(), 4);
@@ -225,7 +225,7 @@ mod test {
 
 	#[test]
 	fn single_element_tuple_serializes() {
-		let original: (u32,) = (0xDEADBEEF,);
+		let original: (u32,) = (0xDEAD_BEEF,);
 		let mut bytes = [0xFF; 4];
 
 		assert_eq!(original.byte_count(), 4);
@@ -242,7 +242,7 @@ mod test {
 
 	#[test]
 	fn two_element_tuple_serializes() {
-		let original: (u32, f32) = (0xDEADBEEF, std::f64::consts::PI as f32);
+		let original: (u32, f32) = (0xDEAD_BEEF, std::f64::consts::PI as f32);
 		let mut bytes = [0xFF; 8];
 
 		assert_eq!(original.byte_count(), 8);

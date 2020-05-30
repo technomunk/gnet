@@ -256,9 +256,10 @@ impl PacketHeader {
 
 	/// Checks whether the header acknowledges provided packet id.
 	pub(super) fn acknowledges(&self, packet_id: PacketIndex) -> bool {
-		match self.signal.is_signal_set(Signal::ConnectionRequest) {
-			true => false,
-			false => match PacketIndex::distance(self.ack_packet_id, packet_id) {
+		if self.signal.is_signal_set(Signal::ConnectionRequest) {
+			false
+		} else {
+			match PacketIndex::distance(self.ack_packet_id, packet_id) {
 				0 => self.ack_packet_id == packet_id,
 				x if x <= 64 => {
 					let packet_bit = 1 << (x - 1);
@@ -303,7 +304,16 @@ pub(super) fn write_data(packet: &mut [u8], data: &[u8], offset: usize) {
 	debug_assert!(packet.len() == PACKET_SIZE);
 	debug_assert!(data.len() + offset <= PAYLOAD_SIZE);
 	let offset = offset + size_of::<PacketHeader>();
-	&packet[offset .. offset + data.len()].copy_from_slice(data);
+	packet[offset .. offset + data.len()].copy_from_slice(data)
+}
+
+/// Clear the remainder of the data segment of the packet starting at provided offset.
+pub(super) fn clear_remaining_data(packet: &mut [u8], offset: usize) {
+	debug_assert!(packet.len() == PACKET_SIZE);
+	debug_assert!(offset <= PAYLOAD_SIZE);
+	let offset = offset + size_of::<PacketHeader>();
+	let zeros = vec![0; PACKET_SIZE - offset];
+	packet[offset..].copy_from_slice(&zeros)
 }
 
 /// Write the provided packet header into provided packet.

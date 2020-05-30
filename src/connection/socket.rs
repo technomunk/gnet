@@ -137,14 +137,13 @@ impl ServerSocket {
 			}
 		};
 		let reference_buffer = self.connections.get_mut(&connection_id).unwrap();
-		match reference_buffer.is_empty() {
-			true => Err(SocketError::NoPendingPackets),
-			false => {
-				buffer.extend(&reference_buffer[..]);
-				let received_bytes = reference_buffer.len();
-				reference_buffer.clear();
-				Ok(received_bytes)
-			},
+		if reference_buffer.is_empty() {
+			Err(SocketError::NoPendingPackets)
+		} else {
+			buffer.extend(&reference_buffer[..]);
+			let received_bytes = reference_buffer.len();
+			reference_buffer.clear();
+			Ok(received_bytes)
 		}
 	}
 

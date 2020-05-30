@@ -17,6 +17,8 @@ use std::time::{Duration, Instant};
 /// A unique index associated with a connection.
 pub(super) type ConnectionId = u16;
 
+const RESYNC_PERIOD: Duration = Duration::from_millis(200);
+
 /// An error during the operation of a [`Connection`](struct.Connection.html).
 #[derive(Debug)]
 pub enum ConnectionError {
@@ -38,7 +40,7 @@ pub enum PendingConnectionError<P: Parcel, H: StableBuildHasher> {
 	/// The answer has been received, but it was incorrect.
 	InvalidAnswer(PendingConnection<P, H>),
 	/// An unexpected IO error ocurred.
-	Io((IoError, PendingConnection<P, H>)),
+	Io(IoError),
 	/// The connection has been actively rejected by the other end (and subsequently consumed).
 	Rejected,
 	/// The predicate passed to `try_promote()` returned false.
@@ -102,6 +104,8 @@ pub struct PendingConnection<P: Parcel, H: StableBuildHasher> {
 	hash_builder: H,
 	packet_buffer: Vec<u8>,
 	last_sent_packet_time: Instant,
+	last_communication_time: Instant,
+	payload: Vec<u8>,
 
 	_message_type: PhantomData<P>,
 }
@@ -127,31 +131,62 @@ impl Error for ConnectionError {
 	}
 }
 
+impl<P: Parcel, H: StableBuildHasher> std::fmt::Display for PendingConnectionError<P, H> {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			PendingConnectionError::NoAnswer(_) => write!(f, "no answer has yet been received"),
+			PendingConnectionError::InvalidAnswer(_) => write!(f, "an misformed answer has been received"),
+			PendingConnectionError::Io(error) => error.fmt(f),
+			PendingConnectionError::Rejected => write!(f, "connection has been actively rejected by the other end"),
+			PendingConnectionError::PredicateFail => write!(f, "the answer from the other end failed the predicate"),
+		}
+	}
+}
+
+impl<P, H> Error for PendingConnectionError<P, H> where
+	P: Parcel + std::fmt::Debug,
+	H: StableBuildHasher + std::fmt::Debug,
+{
+	fn source(&self) -> Option<&(dyn Error + 'static)> {
+		match self {
+			PendingConnectionError::Io(error) => Some(error as &dyn Error),
+			_ => None,
+		}
+	}	
+}
+
+impl<P: Parcel, H: StableBuildHasher> From<IoError> for PendingConnectionError<P, H> {
+	fn from(error: IoError) -> Self { PendingConnectionError::Io(error) }
+}
+
 impl<P: Parcel, H: StableBuildHasher> Connection<P, H> {
 	/// Attempt to establish a connection to provided remote address.
 	#[inline]
-	pub fn connect(remote: SocketAddr, port: u16, hash_builder: H, payload: &[u8]) -> Result<PendingConnection<P, H>, ConnectError> {
+	pub fn connect(remote: SocketAddr, port: u16, hash_builder: H, payload: Vec<u8>) -> Result<PendingConnection<P, H>, ConnectError> {
 		Connection::connect_with_socket(remote, UdpSocket::bind(("127.0.0.1", port))?, hash_builder, payload)
 	}
 
 	/// Attempt to establish a connection to provided remote address using an existing socket.
-	pub fn connect_with_socket(remote: SocketAddr, socket: UdpSocket, hash_builder: H, payload: &[u8]) -> Result<PendingConnection<P, H>, ConnectError> {
+	pub fn connect_with_socket(remote: SocketAddr, socket: UdpSocket, hash_builder: H, payload: Vec<u8>) -> Result<PendingConnection<P, H>, ConnectError> {
 		if payload.len() > packet::PAYLOAD_SIZE {
 			Err(ConnectError::PayloadTooLarge)
 		} else {
 			let mut socket = ClientSocket::new(socket)?;
 			packet::write_header(&mut socket.packet_buffer, PacketHeader::request_connection(payload.len() as u16));
-			if payload.len() > 0 {
-				packet::write_data(&mut socket.packet_buffer, payload, 0);
+			if ! payload.is_empty() {
+				packet::write_data(&mut socket.packet_buffer, &payload, 0);
 			}
 			packet::generate_and_write_hash(&mut socket.packet_buffer, hash_builder.build_hasher());
 			socket.send_to(&socket.packet_buffer, remote)?;
+			let communication_time = Instant::now();
 			Ok(PendingConnection{
 				socket,
 				remote,
 				hash_builder,
 				packet_buffer: Vec::with_capacity(PACKET_SIZE),
-				last_sent_packet_time: Instant::now(),
+				last_sent_packet_time: communication_time,
+				last_communication_time: communication_time,
+				payload,
 				_message_type: PhantomData,
 			})
 		}
@@ -261,38 +296,37 @@ impl<P: Parcel, H: StableBuildHasher> PendingConnection<P, H> {
 	pub fn try_promote<F: FnOnce(&[u8]) -> bool>(mut self, predicate: F) -> Result<Connection<P, H>, PendingConnectionError<P, H>> {
 		if let Err(error) = self.socket.recv_all(&mut self.packet_buffer, None, &self.hash_builder) {
 			match error {
-				SocketError::Io(error) => return Err(PendingConnectionError::Io((error, self))),
+				SocketError::Io(error) => return Err(PendingConnectionError::Io(error)),
 				SocketError::NoPendingPackets => (),
 			}
 		};
-		match self.packet_buffer.is_empty() {
-			true => Err(PendingConnectionError::NoAnswer(self)),
-			false => {
-				let packet = &self.packet_buffer[..PACKET_SIZE];
-				if predicate(packet::get_data_segment(packet)) {
-					let connection_id = packet::get_header(packet).connection_id;
-					// Drop the first packet as it has been processed.
-					self.packet_buffer.drain(..PACKET_SIZE);
-					Ok(Connection{
-						socket: Socket::Client(self.socket),
-						remote: self.remote,
-						hash_builder: self.hash_builder,
-						connection_id,
-						packet_buffer: self.packet_buffer,
-						status: ConnectionStatus::Open,
-						last_sent_packet_time: self.last_sent_packet_time,
-						last_received_packet_time: Instant::now(),
+		if self.packet_buffer.is_empty() {
+			Err(PendingConnectionError::NoAnswer(self))
+		} else {
+			let packet = &self.packet_buffer[..PACKET_SIZE];
+			if predicate(packet::get_data_segment(packet)) {
+				let connection_id = packet::get_header(packet).connection_id;
+				// Drop the first packet as it has been processed.
+				self.packet_buffer.drain(..PACKET_SIZE);
+				Ok(Connection{
+					socket: Socket::Client(self.socket),
+					remote: self.remote,
+					hash_builder: self.hash_builder,
+					connection_id,
+					packet_buffer: self.packet_buffer,
+					status: ConnectionStatus::Open,
+					last_sent_packet_time: self.last_sent_packet_time,
+					last_received_packet_time: Instant::now(),
 
-						sent_packet_buffer: Vec::with_capacity(65),
-						received_packet_ack_id: 0.into(),
-						received_packet_ack_mask: 0,
+					sent_packet_buffer: Vec::with_capacity(65),
+					received_packet_ack_id: 0.into(),
+					received_packet_ack_mask: 0,
 
-						_message_type: self._message_type,
-					})
-				} else {
-					Err(PendingConnectionError::PredicateFail)
-				}
-			},
+					_message_type: self._message_type,
+				})
+			} else {
+				Err(PendingConnectionError::PredicateFail)
+			}
 		}
 	}
 
@@ -307,7 +341,23 @@ impl<P: Parcel, H: StableBuildHasher> PendingConnection<P, H> {
 	/// - Reads any pending network packets, filtering them.
 	/// - If no packets have been received for half a timeout window re-sends the request.
 	pub fn sync(&mut self) -> Result<(), PendingConnectionError<P, H>> {
-		// TODO: implement
+		match self.socket.recv_all(&mut self.packet_buffer, None, &self.hash_builder) {
+			Err(SocketError::Io(error)) => return Err(PendingConnectionError::Io(error)),
+			Err(SocketError::NoPendingPackets) => (),
+			Ok(_) => self.last_communication_time = Instant::now(),
+		};
+		if Instant::now().duration_since(self.last_communication_time) > RESYNC_PERIOD {
+			// Send another request
+			packet::write_header(&mut self.socket.packet_buffer, PacketHeader::request_connection(self.payload.len() as u16));
+			if ! self.payload.is_empty() {
+				packet::write_data(&mut self.socket.packet_buffer, &self.payload, 0);
+			}
+			packet::generate_and_write_hash(&mut self.socket.packet_buffer, self.hash_builder.build_hasher());
+			self.socket.send_to(&self.socket.packet_buffer, self.remote)?;
+			let communication_time = Instant::now();
+			self.last_communication_time = communication_time;
+			self.last_sent_packet_time = communication_time;
+		};
 		Ok(())
 	}
 }
