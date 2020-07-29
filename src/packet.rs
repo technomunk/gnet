@@ -13,15 +13,10 @@
 use std::mem::size_of;
 use std::num::Wrapping;
 use std::cmp::{PartialOrd, Ordering};
-use std::hash::Hasher;
 
 use signal::*;
 
 use super::connection::ConnectionId;
-
-pub const PAYLOAD_SIZE: usize = 1024;
-
-pub const PACKET_SIZE: usize = PAYLOAD_SIZE + size_of::<PacketHeader>();
 
 /// Networked data is preluded with this fixed-size user-data.
 pub type DataPrelude = [u8; 4];
@@ -164,7 +159,6 @@ mod signal {
 #[derive(Debug, Clone, Copy, Eq)]
 #[repr(C)]
 pub(crate) struct PacketHeader {
-	pub hash: Hash,
 	pub connection_id: ConnectionId,
 	/// Consists of multiple components. See [`Protocol`](struct.Protocol.html) for details.
 	pub packet_id: PacketIndex,
@@ -176,8 +170,6 @@ pub(crate) struct PacketHeader {
 	/// User-provided prelude,
 	pub prelude: DataPrelude,
 }
-
-pub(crate) type PacketBuffer = Box<[u8]>;
 
 impl PartialOrd for PacketIndex {
 	#[inline]
@@ -244,7 +236,6 @@ impl PacketHeader {
 	#[inline]
 	pub(crate) fn request_connection(payload_size: u16) -> Self {
 		Self {
-			hash: 0,
 			connection_id: 0,
 			signal: SignalBits::request_connection(payload_size),
 			packet_id: 0.into(),
@@ -271,90 +262,58 @@ impl PacketHeader {
 	}
 }
 
-/// Create a new packet-buffer.
-#[inline]
-pub(crate) fn new_buffer() -> PacketBuffer {
-	Box::new([0; PACKET_SIZE])
-}
-
 /// Get the data segment of a packet.
 #[inline]
 pub(crate) fn get_data_segment(packet: &[u8]) -> &[u8] {
-	debug_assert!(packet.len() == PACKET_SIZE);
+	debug_assert!(packet.len() >= size_of::<PacketHeader>());
 	&packet[size_of::<PacketHeader>()..]
 }
 
 /// Get the mutable data segment of a packet.
 #[inline]
 pub(crate) fn get_mut_data_segment(packet: &mut [u8]) -> &mut [u8] {
-	debug_assert!(packet.len() == PACKET_SIZE);
+	debug_assert!(packet.len() >= size_of::<PacketHeader>());
 	&mut packet[size_of::<PacketHeader>()..]
 }
 
 /// Get the header segment of a packet.
 #[inline]
 pub(crate) fn get_header(packet: &[u8]) -> &PacketHeader {
-	debug_assert!(packet.len() == PACKET_SIZE);
+	debug_assert!(packet.len() >= size_of::<PacketHeader>());
+	debug_assert!(packet.as_ptr().align_offset(std::mem::align_of::<PacketHeader>()) == 0);
+	#[allow(clippy::cast_ptr_alignment)]
 	unsafe { &*(packet.as_ptr() as *const PacketHeader) }
 }
 
 /// Write the provided data into the provided packet data segment.
 #[inline]
 pub(crate) fn write_data(packet: &mut [u8], data: &[u8], offset: usize) {
-	debug_assert!(packet.len() == PACKET_SIZE);
-	debug_assert!(data.len() + offset <= PAYLOAD_SIZE);
+	debug_assert!(packet.len() >= size_of::<PacketHeader>());
 	let offset = offset + size_of::<PacketHeader>();
 	packet[offset .. offset + data.len()].copy_from_slice(data)
 }
 
 /// Clear the remainder of the data segment of the packet starting at provided offset.
 pub(crate) fn clear_remaining_data(packet: &mut [u8], offset: usize) {
-	debug_assert!(packet.len() == PACKET_SIZE);
-	debug_assert!(offset <= PAYLOAD_SIZE);
+	debug_assert!(packet.len() >= size_of::<PacketHeader>());
 	let offset = offset + size_of::<PacketHeader>();
-	let zeros = vec![0; PACKET_SIZE - offset];
-	packet[offset..].copy_from_slice(&zeros)
+	for i in packet[offset .. ].iter_mut() {
+		*i = 0
+	}
 }
 
 /// Write the provided packet header into provided packet.
 #[inline]
 pub(crate) fn write_header(packet: &mut [u8], header: PacketHeader) {
-	debug_assert!(packet.len() == PACKET_SIZE);
+	debug_assert!(packet.len() >= size_of::<PacketHeader>());
+	debug_assert!(packet.as_ptr().align_offset(std::mem::align_of::<PacketHeader>()) == 0);
+	#[allow(clippy::cast_ptr_alignment)]
 	unsafe { *(packet.as_mut_ptr() as *mut PacketHeader) = header }
-}
-
-/// Generate the hash associated with data in provided packet.
-#[inline]
-pub(crate) fn generate_hash<H: Hasher>(packet: &[u8], mut hasher: H) -> Hash {
-	debug_assert!(packet.len() == PACKET_SIZE);
-	hasher.write(&packet[size_of::<Hash>()..]);
-	hasher.finish() as Hash
-}
-
-/// Generate the hash associated with data in provided packet and write it to the packet immediately.
-#[inline]
-pub(crate) fn generate_and_write_hash<H: Hasher>(packet: &mut [u8], hasher: H) {
-	debug_assert!(packet.len() == PACKET_SIZE);
-	unsafe { *(packet.as_ptr() as *mut Hash) = generate_hash(packet, hasher) }
-}
-
-/// Read the hash from the packet.
-#[inline]
-pub(crate) fn read_hash(packet: &[u8]) -> Hash {
-	debug_assert!(packet.len() == PACKET_SIZE);
-	unsafe { *(packet.as_ptr() as *const Hash) }
-}
-
-/// Is the given packet data valid given provided hasher?
-#[inline]
-pub fn valid_hash<H: Hasher>(packet: &[u8], hasher: H) -> bool {
-	debug_assert!(packet.len() == PACKET_SIZE);
-	read_hash(packet) == generate_hash(packet, hasher)
 }
 
 /// Read the connection id from the provided packet.
 pub fn read_connection_id(packet: &[u8]) -> ConnectionId {
-	debug_assert!(packet.len() == PACKET_SIZE);
+	debug_assert!(packet.len() >= size_of::<PacketHeader>());
 	get_header(packet).connection_id
 }
 
@@ -399,11 +358,5 @@ mod test {
 		assert_eq!(header.acknowledges(3.into()), false);
 		assert_eq!(header.acknowledges(16.into()), false);
 		assert_eq!(header.acknowledges(18.into()), false);
-	}
-
-	#[test]
-	fn sizes_are_as_expected() {
-		assert_eq!(std::mem::size_of::<PacketHeader>(), 24);
-		assert_eq!(PACKET_SIZE, 1048);
 	}
 }
