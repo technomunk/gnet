@@ -11,11 +11,6 @@ use crate::connection::ConnectionId;
 use crate::packet::read_connection_id;
 use crate::StableBuildHasher;
 
-/// A marker trait for client-specific `transmitters`.
-/// 
-/// Clients initiate the connection to the server, which may or may not reject them.
-pub trait ClientTransmit : Transmit {}
-
 /// Basic wrapper implementation of a ClientEndpoint over a UdpSocket.
 #[derive(Debug)]
 pub struct ClientUdpEndpoint<H: StableBuildHasher> {

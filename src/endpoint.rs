@@ -7,7 +7,7 @@ mod client;
 mod server;
 
 use std::net::SocketAddr;
-use std::io::Error as IoError;
+use std::io::{Error as IoError, ErrorKind as IoErrorKind};
 
 use super::connection::ConnectionId;
 
@@ -36,7 +36,7 @@ pub enum TransmitError {
 /// - All messages are sent in fixed-size packets.
 /// - Packets are delivered in a best-effort manner (may be dropped).
 /// - Packets are delivered in no particular order.
-pub trait Transmit : Sized {
+pub trait Transmit {
 	/// Allowed payload size of the packets sent by this 'endpoint' in bytes.
 	/// 
 	/// **NOTE**: it should include any `` reserved by the 'endpoint'.
@@ -73,5 +73,50 @@ pub trait Transmit : Sized {
 	fn recv_all(&self, buffer: &mut Vec<u8>, connection_id: ConnectionId) -> Result<usize, TransmitError>;
 }
 
+/// A trait for listening endpoints.
+/// 
+/// Listening endpoints require the ability to pop individual packets with `0` connection id,
+/// and provide their source address.
+pub trait Listen {
+	/// Allow receiving packets with provided connection id.
+	/// 
+	/// By default all connection_ids except for `0` are assumed to be blocked.
+	fn allow_connection_id(&self, connection_id: ConnectionId) {}
+
+	/// Disallow receiving packets with provided connection id.
+	/// 
+	/// Undo `allow_connection_id`, allowing the endpoint to drop packets with provided connection id.
+	/// By default all connection_ids except for `0` are assumed to be blocked.
+	fn block_connection_id(&self, connection_id: ConnectionId) {}
+
+	/// Remove a single packet without a connection id (`connection_id` of the packet is `0`).
+	/// 
+	/// Return the popped packet as well as its source address or a `TransmitError`.
+	/// The order of popping the packet is up to the implementation.
+	fn pop_connectionless_packet(&self) -> Result<(SocketAddr, Box<[u8]>), TransmitError>;
+}
+
+impl std::fmt::Display for TransmitError {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Self::NoPendingPackets => write!(f, "there were no pending packets for provided connection"),
+			Self::Io(error) => {
+				write!(f, "underlying IO error: ");
+				error.fmt(f)
+			}
+		}
+	}
+}
+
+impl std::error::Error for TransmitError {
+	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+		match self {
+			Self::NoPendingPackets => None,
+			Self::Io(error) => Some(error),
+		}
+	}
+}
+
 // Re-exports
-pub use client::{ClientTransmit, ClientUdpEndpoint};
+pub use client::ClientUdpEndpoint;
+pub use server::ServerUdpEndpoint;

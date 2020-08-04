@@ -5,7 +5,7 @@ use crate::byte::{ByteSerialize, SerializationError};
 use super::Parcel;
 use super::packet;
 use super::packet::PacketHeader;
-use super::endpoint::{ClientTransmit, Transmit, TransmitError};
+use super::endpoint::{Transmit, TransmitError};
 
 use std::error::Error;
 use std::io::{Error as IoError};
@@ -191,12 +191,12 @@ impl<T: Transmit, P: Parcel> From<IoError> for PendingConnectionError<T, P> {
 	fn from(error: IoError) -> Self { PendingConnectionError::Io(error) }
 }
 
-impl<T: ClientTransmit, P: Parcel> Connection<T, P> {
+impl<T: Transmit, P: Parcel> Connection<T, P> {
 	const PAYLOAD_BYTE_COUNT: usize = T::PACKET_BYTE_COUNT - std::mem::size_of::<PacketHeader>();
 
 	/// Attempt to establish a new connection to provided remote address from provided local one.
 	#[inline]
-	pub fn connect(mut endpoint: T, remote: SocketAddr, payload: Vec<u8>) -> Result<PendingConnection<T, P>, ConnectError> {
+	pub fn connect(endpoint: T, remote: SocketAddr, payload: Vec<u8>) -> Result<PendingConnection<T, P>, ConnectError> {
 		if payload.len() > Self::PAYLOAD_BYTE_COUNT {
 			Err(ConnectError::PayloadTooLarge)
 		} else {
@@ -221,9 +221,6 @@ impl<T: ClientTransmit, P: Parcel> Connection<T, P> {
 		}
 	}
 
-}
-
-impl<T: Transmit, P: Parcel> Connection<T, P> {
 	/// Get the current status (state) of the `Connection`.
 	#[inline]
 	pub fn status(&self) -> ConnectionStatus { self.status }

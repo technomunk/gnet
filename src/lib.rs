@@ -12,7 +12,7 @@ use std::hash::BuildHasher;
 
 // TODO: consider whether this is necessary
 pub use connection::{Connection, PendingConnection, ConnectionError, PendingConnectionError};
-pub use endpoint::{Transmit, ClientTransmit, ClientUdpEndpoint};
+pub use endpoint::{Transmit, Listen, ClientUdpEndpoint, ServerUdpEndpoint};
 
 use crate::byte::ByteSerialize;
 
