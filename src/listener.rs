@@ -77,6 +77,7 @@ impl<E: Transmit + Listen + Clone, P: Parcel> Listener<E, P> {
 		let header = packet::get_header(&packet);
 
 		packet.len() == E::PACKET_BYTE_COUNT
+			&& header.connection_id == 0
 			&& header.signal.is_signal_set(packet::Signal::ConnectionRequest)
 			&& header.signal.is_signal_set(packet::Signal::Synchronized)
 	}

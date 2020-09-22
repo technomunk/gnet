@@ -96,7 +96,6 @@ pub struct Connection<T: Transmit, P: Parcel> {
 	// TODO/https://github.com/rust-lang/rust/issues/43408 : use an array with T::PACKET_BYTE_COUNT bytes
 	sent_packet_buffer: Vec<(Instant, Vec<u8>)>,
 	// TODO: connection-accept should be a synchronized packet with id 0.
-	// TODO: connection-request should be a synchronized packet with id 0.
 	received_packet_ack_id: packet::PacketIndex,
 	received_packet_ack_mask: u64,
 
