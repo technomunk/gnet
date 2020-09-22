@@ -99,11 +99,23 @@ mod signal {
 			self.0 = (self.0 & !(SIZE_BITS << 11)) | ((len as u32) << 11);
 		}
 
+		/// Get the byte-count of the parcel potion of the packet
+		#[inline]
+		pub(crate) fn get_parcel_size(&self) -> u16 {
+			((self.0 & (SIZE_BITS << 11)) >> 11) as u16
+		}
+
 		/// Set the byte-count of the stream portion of the packet to given value.
 		#[inline]
 		pub(crate) fn set_stream_size(&mut self, len: u16) {
 			debug_assert_eq!(len & SIZE_BITS as u16, len);
 			self.0 = (self.0 & !SIZE_BITS) | len as u32;
+		}
+
+		/// Get the byte-count of the stream potion of the packet
+		#[inline]
+		pub(crate) fn get_stream_size(&self) -> u16 {
+			(self.0 & SIZE_BITS) as u16
 		}
 	
 		/// Create a *KeepAlive* protocol bitpattern.
@@ -154,6 +166,8 @@ mod signal {
 		}
 	}
 }
+
+pub(crate) use signal::{Signal, SignalBits};
 
 /// Header associated with each sent network packet.
 #[derive(Debug, Clone, Copy, Eq)]
@@ -245,7 +259,7 @@ impl PacketHeader {
 		}
 	}
 
-	/// Checks whether the header acknowledges provided packet id.
+	/// Check whether the header acknowledges provided packet id.
 	pub(crate) fn acknowledges(&self, packet_id: PacketIndex) -> bool {
 		if self.signal.is_signal_set(Signal::ConnectionRequest) {
 			false
@@ -267,6 +281,26 @@ impl PacketHeader {
 pub(crate) fn get_data_segment(packet: &[u8]) -> &[u8] {
 	debug_assert!(packet.len() >= size_of::<PacketHeader>());
 	&packet[size_of::<PacketHeader>()..]
+}
+
+/// Get the valid stream portion of the packet
+#[inline]
+pub(crate) fn get_parcel_segment(packet: &[u8]) -> &[u8] {
+	let &header = get_header(packet);
+	let start = size_of::<PacketHeader>();
+	let end = start + header.signal.get_parcel_size() as usize;
+	debug_assert!(packet.len() >= end);
+	&packet[start .. end]
+}
+
+/// Get the valid stream portion of the packet
+#[inline]
+pub(crate) fn get_stream_segment(packet: &[u8]) -> &[u8] {
+	let &header = get_header(packet);
+	let start = size_of::<PacketHeader>() + header.signal.get_parcel_size() as usize;
+	let end = start + header.signal.get_stream_size() as usize;
+	debug_assert!(packet.len() >= end);
+	&packet[start .. end]
 }
 
 /// Get the mutable data segment of a packet.
