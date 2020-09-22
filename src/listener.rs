@@ -21,13 +21,14 @@ pub enum AcceptError {
 	/// Something happened attempting to read an incoming packet
 	Transmit(TransmitError),
 	/// The pending connection sent an invalid request packet and was dropped
-	/// However there may still be other connections to accept
+	/// There may still be other connections to accept
 	/// Contains the address of the source of the invalid request
 	InvalidRequest(SocketAddr),
+	/// The pending connection failed the provided predicate
+	/// There may still be other connections to accept
+	PredicateFail,
 	/// There were no connections to accept
 	NoPendingConnections,
-	/// The pending connection failed the provided predicate
-	PredicateFail,
 }
 
 impl<E: Transmit + Listen + Clone, P: Parcel> Listener<E, P> {
@@ -38,6 +39,11 @@ impl<E: Transmit + Listen + Clone, P: Parcel> Listener<E, P> {
 
 	/// Attempt to accept an incoming connection using provided predicate.
 	/// 
+	/// Will pop a single connection request from the endpoint, validate the packet and invoke the predicate if the request is valid.
+	/// If the predicate returns `true` the function returns a newly established `Connection`,
+	/// otherwise will return `AcceptError::PredicateFail`.
+	/// 
+	/// ## Notes
 	/// Does NOT block the calling thread, returning NoPendingConnections if there are no pending connections remaining.
 	pub fn try_accept<F: FnOnce(SocketAddr, &[u8]) -> bool>(&self, predicate: F) -> Result<Connection<E, P>, AcceptError> {
 		match self.endpoint.pop_connectionless_packet() {
