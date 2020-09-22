@@ -7,7 +7,7 @@ mod client;
 mod server;
 
 use std::net::SocketAddr;
-use std::io::{Error as IoError, ErrorKind as IoErrorKind};
+use std::io::{Error as IoError};
 
 use super::connection::ConnectionId;
 
