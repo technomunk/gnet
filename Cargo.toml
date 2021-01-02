@@ -14,3 +14,6 @@ repository = "https://github.com/Griffone/gnet"
 documentation = "https://docs.rs/gnet"
 
 [dependencies]
+
+[dev-dependencies]
+hashers = "1.0.1"

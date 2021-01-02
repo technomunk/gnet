@@ -1,7 +1,7 @@
-//! A listener listens for new connections, accepting or denying them.
+//! Definition of listeners that the server uses to accept new connections.
 
 use crate::Parcel;
-use crate::connection::{Connection, ConnectionStatus};
+use crate::connection::{Connection, ConnectionId, ConnectionStatus};
 use crate::endpoint::{Transmit, TransmitError, Listen};
 use crate::packet;
 use std::net::SocketAddr;
@@ -50,22 +50,8 @@ impl<E: Transmit + Listen + Clone, P: Parcel> Listener<E, P> {
 			Ok((address, packet)) => {
 				if Self::is_valid_connection_request_packet(&packet) {
 					if predicate(address, packet::get_stream_segment(&packet)) {
-						Ok(Connection {
-							endpoint: self.endpoint.clone(),
-							// TODO: handle ids
-							connection_id: ConnectionId,
-							remote: address,
-							packet_buffer: Vec::new(),
-							status: ConnectionStatus::Open,
-							last_sent_packet_time: Instant::now(),
-							last_received_packet_time: Instant::now(),
-						
-							sent_packet_buffer: Vec::new(),
-							received_packet_ack_id: 0.into(),
-							received_packet_ack_mask: 0,
-						
-							_message_type: PhantomData,
-						})
+						// TODO: handle ids
+						Ok(Connection::opened(self.endpoint.clone(), Default::default(), address))
 					} else {
 						Err(AcceptError::PredicateFail)
 					}

@@ -1,14 +1,15 @@
+//! Helper structs and functions to interpret and modify packet data.
+//!
 //! A packet is an indexable datagram sent over the network (using UDP).
-//! 
 //! Packets consist of 2 parts:
 //! - `Header` with technical information.
 //! - `Payload` with user data.
-//! 
 //! The payload itself may consist of:
-//! - A number of [`Parcel`](../trait.Parcel.html)s
+//! - One or more instances of [`Parcel`](super::Parcel) implementations.
 //! - Part of a data stream.
 //! 
-//! The code in this module is responsible for dealing handling individual packets efficiently.
+//! The GNet uses the headers to transmit metadata, such as
+//! acknowledging packets or sampling the connection latency.
 
 use std::mem::size_of;
 use std::num::Wrapping;
@@ -25,14 +26,15 @@ pub type Hash = u32;
 
 /// An identifying index of the packet, used to order packets.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PacketIndex(Wrapping<u8>);
+pub struct PacketIndex(Wrapping<u8>);
 
 /// Protocol control bitpatterns.
 mod signal {
 	/// Possible signals sent in the packet protocol.
 	#[derive(Debug, Clone, Copy)]
 	pub(crate) enum Signal {
-		/// The packet is a connection request (parcel bytes == 0, stream bytes => payload size).
+		/// The packet is a request for a new connection.
+		// (parcel bytes == 0, stream bytes => payload size)
 		ConnectionRequest,
 		/// The connection is about to be closed.
 		ConnectionClose,
@@ -58,7 +60,7 @@ mod signal {
 	impl SignalBits {
 		/// Sets the signal flags associated with given signal.
 		/// 
-		/// To read the flag use [`is_set`](struct.Protocol.html#method.is_signal_set) method.
+		/// To read the flag use [`is_signal_set`](SignalBits::is_signal_set) method.
 		#[inline]
 		pub(crate) fn set_signal(&mut self, signal: Signal) {
 			match signal {
@@ -70,7 +72,7 @@ mod signal {
 	
 		/// Clears the signal flags associated with given signal.
 		/// 
-		/// To read the flag use [`is_set`](struct.Protocol.html#method.is_signal_set) method.
+		/// To read the flag use [`is_signal_set`](SignalBits::is_signal_set) method.
 		#[inline]
 		pub(crate) fn clear_signal(&mut self, signal: Signal) {
 			match signal {
@@ -82,7 +84,7 @@ mod signal {
 	
 		/// Checks if the signal flags associated with given signal have been set.
 		/// 
-		/// The flags are set with [`set_signal`](struct.Protocol.html#method.set_signal) and cleared with [`clear_signal`](struct.Protocol.html#method.clear_signal) methods.
+		/// The flags are set with [`set_signal`](SignalBits::set_signal) and cleared with [`clear_signal`](SignalBits::clear_signal) methods.
 		#[inline]
 		pub(crate) fn is_signal_set(&self, signal: Signal) -> bool {
 			match signal {
@@ -173,13 +175,15 @@ pub(crate) use signal::{Signal, SignalBits};
 #[derive(Debug, Clone, Copy, Eq)]
 #[repr(C)]
 pub(crate) struct PacketHeader {
+	/// Id of the owning connection.
 	pub connection_id: ConnectionId,
-	/// Consists of multiple components. See [`Protocol`](struct.Protocol.html) for details.
+	/// Sequential index of the packet.
 	pub packet_id: PacketIndex,
-	/// Id of the latest acknowledged packet.
+	/// Id of the latest acknowledged packet by the other end.
 	pub ack_packet_id: PacketIndex,
 	/// Bitmask of 64 acks for preceding packets (64 packets before `ack_packet_id`).
 	pub ack_packet_mask: u64,
+	/// Control signals for the connection.
 	pub signal: SignalBits,
 	/// User-provided prelude,
 	pub prelude: DataPrelude,
@@ -340,7 +344,7 @@ pub(crate) fn clear_remaining_data(packet: &mut [u8], offset: usize) {
 #[inline]
 pub(crate) fn write_header(packet: &mut [u8], header: PacketHeader) {
 	debug_assert!(packet.len() >= size_of::<PacketHeader>());
-	debug_assert!(packet.as_ptr().align_offset(std::mem::align_of::<PacketHeader>()) == 0);
+	debug_assert_eq!(packet.as_ptr().align_offset(std::mem::align_of::<PacketHeader>()), 0);
 	#[allow(clippy::cast_ptr_alignment)]
 	unsafe { *(packet.as_mut_ptr() as *mut PacketHeader) = header }
 }

@@ -1,4 +1,4 @@
-//! Connections provide a continuous stream of data as long as they are valid.
+//! Definitions of connection-related structs. This is the primary export of the library.
 
 use crate::byte::{ByteSerialize, SerializationError};
 
@@ -93,13 +93,35 @@ pub struct Connection<T: Transmit, P: Parcel> {
 	last_sent_packet_time: Instant,
 	last_received_packet_time: Instant,
 
-	// TODO/https://github.com/rust-lang/rust/issues/43408 : use an array with T::PACKET_BYTE_COUNT bytes
+	// TODO/https://github.com/rust-lang/rust/issues/43408 : use [u8; T::PACKET_BYTE_COUNT] instead of Vec<u8>.
 	sent_packet_buffer: Vec<(Instant, Vec<u8>)>,
 	// TODO: connection-accept should be a synchronized packet with id 0.
 	received_packet_ack_id: packet::PacketIndex,
 	received_packet_ack_mask: u64,
 
 	_message_type: PhantomData<P>,
+}
+
+impl<T: Transmit, P: Parcel> Connection<T, P> {
+	/// Construct a connection in an open state.
+	pub(crate) fn opened(endpoint: T, connection_id: ConnectionId, remote: SocketAddr) -> Self {
+		let now = Instant::now();
+		Self {
+			endpoint,
+			connection_id,
+			remote,
+			packet_buffer: Vec::with_capacity(T::PACKET_BYTE_COUNT),
+			status: ConnectionStatus::Open,
+			last_sent_packet_time: now,
+			last_received_packet_time: now,
+
+			sent_packet_buffer: Vec::with_capacity(65),
+			received_packet_ack_id: Default::default(),
+			received_packet_ack_mask: 0,
+
+			_message_type: PhantomData,
+		}
+	}
 }
 
 /// A temporary connection that is in the process of being established for the first time.

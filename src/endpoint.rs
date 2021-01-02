@@ -1,6 +1,8 @@
-//! An endpoint is one of the 2 ends of a virtual connection.
-//! 
-//! It may either be a simple udp socket ([`ClientUdpEndpoint`](struct.ClientUdpEndpoint.html)) or have additional demultiplexing logic ([`ServerUdpEndpoint`]()).
+//! Definitions of traits an endpoint implementation must provide.
+//!
+//! An endpoint is one of the 2 ends of a virtual connection. It may either
+//! be a simple udp socket ([`ClientUdpEndpoint`](ClientUdpEndpoint)) or have
+//! additional demultiplexing logic ([`ServerUdpEndpoint`](ServerUdpEndpoint)).
 
 mod hash;
 mod client;
@@ -37,15 +39,18 @@ pub enum TransmitError {
 /// - Packets are delivered in a best-effort manner (may be dropped).
 /// - Packets are delivered in no particular order.
 pub trait Transmit {
-	/// Allowed payload size of the packets sent by this 'endpoint' in bytes.
+	/// Number of bytes that sent datagrams consist of.
 	/// 
-	/// **NOTE**: it should include any `` reserved by the 'endpoint'.
+	/// **NOTE**: it should include any
+	/// [`PACKET_HEADER_BYTE_COUNT`](Self::PACKET_HEADER_BYTE_COUNT)
+	/// reserved by the 'endpoint'.
 	const PACKET_BYTE_COUNT: usize;
 
 	/// Number of reserved bytes by the 'endpoint'.
 	/// 
-	/// This many first bytes of any sent packets are left untouched by the `Connection` implementation,
-	/// allowing the 'endpoint' to write checksums or other data for validating the packets.
+	/// This many first bytes of any sent packets are left untouched by the
+	/// [`Connection`](super::connection::Connection) implementation, allowing
+	/// the 'endpoint' to write checksums or other data for validating the packets.
 	/// 
 	/// **NOTE**: this allows avoiding an extra copy during the sending process.
 	const PACKET_HEADER_BYTE_COUNT: usize;
@@ -55,28 +60,30 @@ pub trait Transmit {
 	/// Return the number of bytes sent, which must be at least the size of `data`.
 	/// Or the error responsible for the failure.
 	/// 
-	/// **NOTE**: only the `PACKET_HEADER_BYTE_COUNT` first bytes may be modified,
-	/// the rest of the packet should stay untouched!
+	/// **NOTES**:
+	/// - [`PACKET_HEADER_BYTE_COUNT`](Transmit::PACKET_HEADER_BYTE_COUNT) first bytes may
+	/// be modified by the endpoint, the rest of the packet should stay untouched!
+	/// - May expect data to be comprised of [`PACKET_BYTE_COUNT`](Self::PACKET_BYTE_COUNT) bytes.
 	fn send_to(&self, data: &mut [u8], addr: SocketAddr) -> Result<usize, IoError>;
 
 	/// Attempt to recover all incoming packets for the connection with provided id.
 	/// 
-	/// Return the number of recovered bytes for the provided connection,
-	/// which should be appended to provided buffer vector.
-	/// Or the error responsible for the failure.
-	/// Should have non-blocking behavior,
-	/// meaning if there is no pending packet to recover an `Error(TransmitError::NoPendingPackets)` should be returned.
+	/// Return the number of recovered bytes for the provided connection, which should be appended
+	/// to provided buffer vector. Or the error responsible for the failure. Should
+	/// have non-blocking behavior, meaning if there is no pending packet to recover an
+	/// [`TransmitError::NoPendingPackets`](TransmitError::NoPendingPackets) should be returned.
 	/// 
 	/// **NOTES**:
-	/// - ConnectionId of `0` is a special case of `no-id`!
-	/// - The 'endpoint' is expected to drop `PACKET_HEADER_BYTE_COUNT` bytes of valid incoming packets.
+	/// - ConnectionId of `0` is a special value that means a connectionless packet.
+	/// - Number of received bytes is expected to be an exact
+	/// multiple of [`PACKET_BYTE_COUNT`](Self::PACKET_BYTE_COUNT).
 	fn recv_all(&self, buffer: &mut Vec<u8>, connection_id: ConnectionId) -> Result<usize, TransmitError>;
 }
 
 /// A trait for listening endpoints.
 /// 
-/// Listening endpoints require the ability to pop individual packets with `0` connection id,
-/// and provide their source address.
+/// Listening endpoints require the ability to pop individual packets
+/// with `0` connection id, and provide their source address.
 pub trait Listen {
 	/// Allow receiving packets with provided connection id.
 	/// 
@@ -85,14 +92,15 @@ pub trait Listen {
 
 	/// Disallow receiving packets with provided connection id.
 	/// 
-	/// Undo `allow_connection_id`, allowing the endpoint to drop packets with provided connection id.
-	/// By default all connection_ids except for `0` are assumed to be blocked.
+	/// Undo `allow_connection_id`, allowing the endpoint to drop packets with provided
+	/// connection id. By default all connection_ids except for `0` are assumed to be blocked.
 	fn block_connection_id(&self, connection_id: ConnectionId) {}
 
 	/// Remove a single packet without a connection id (`connection_id` of the packet is `0`).
 	/// 
-	/// Return the popped packet as well as its source address or a `TransmitError`.
-	/// The order of popping the packet is up to the implementation.
+	/// Return the popped packet as well as its source address
+	/// or a [`TransmitError`](TransmitError) The order of
+	/// popping the packet is up to the implementation.
 	fn pop_connectionless_packet(&self) -> Result<(SocketAddr, Box<[u8]>), TransmitError>;
 }
 
