@@ -28,7 +28,7 @@ pub enum ConnectError {
 	PayloadTooLarge,
 }
 
-/// An error during the operation of a [`Connection`](struct.Connection.html).
+/// An error during the operation of a [`Connection`](Connection).
 #[derive(Debug)]
 pub enum ConnectionError {
 	/// The connection has no pending parcels to pop.
@@ -56,7 +56,7 @@ pub enum PendingConnectionError<T: Transmit, P: Parcel> {
 	PredicateFail,
 }
 
-/// State of a [Connection](struct.Connection.html).
+/// State of a [Connection](Connection).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ConnectionStatus {
 	/// Normal functioning state.
@@ -76,14 +76,18 @@ pub enum ConnectionStatus {
 
 /// A virtual connection with to remote access point.
 /// 
-/// This connection is not backed by a stable route (like TCP connections), however it still provides similar functionality.
+/// This connection is not backed by a stable route (like TCP connections),
+/// however it still provides similar functionality.
 /// 
 /// # Generic Parameters
 /// 
-/// - P: [Parcel](trait.Parcel.html) type of passed messages used by this `Connection`.
-/// - H: [StableBuildHasher](trait.StableBuildHasher.html) the hasher used to generate a packet hash.
-/// *NOTE: messages with incorrect hash are immediately discarded, meaning both ends of a connection need to have exact same `BuildHasher`.
-/// It is recommended to seed the hasher with a unique secret seed for the application.*
+/// - P: [Parcel](super::Parcel) type of passed messages used by this [`Connection`](Self).
+/// - H: [StableBuildHasher](super::StableBuildHasher) hasher provided for the connection that is
+/// used to validate transmitted packets.
+/// 
+/// *NOTE: messages with incorrect hash are immediately discarded, meaning both ends of a
+/// connection need to have exact same `BuildHasher`. It is recommended to seed the hasher
+/// with a unique secret seed for the application.
 pub struct Connection<T: Transmit, P: Parcel> {
 	endpoint: T,
 	connection_id: ConnectionId,
@@ -246,9 +250,10 @@ impl<T: Transmit, P: Parcel> Connection<T, P> {
 	#[inline]
 	pub fn status(&self) -> ConnectionStatus { self.status }
 
-	/// Checks that the `Connection` is in `Open` (normal) state.
+	/// Checks that the [`Connection`](Self) is in [`Open`](ConnectionStatus::Open) (normal) state.
 	/// 
-	/// *Note: this only queries the current status of the connection, the connection may still fail after `is_open()` returned true.*
+	/// *Note: this only queries the current status of the connection, the
+	/// connection may still fail after [`is_open()`](Self::is_open) returned true.*
 	#[inline]
 	pub fn is_open(&self) -> bool { self.status == ConnectionStatus::Open }
 
@@ -263,8 +268,9 @@ impl<T: Transmit, P: Parcel> Connection<T, P> {
 
 	/// Begin reliable transmission of provided parcel.
 	/// 
-	/// Reliable parcels are guaranteed to be delivered as long as the connection is in a valid state.
-	/// The order of delivery is not guaranteed however, for order-dependent functionality use streams.
+	/// Reliable parcels are guaranteed to be delivered as long as the connection
+	/// is in a valid state. The order of delivery is not guaranteed however, for
+	/// order-dependent functionality use streams.
 	/// 
 	/// # Notes
 	/// - May result in network packet dispatch.
@@ -274,8 +280,9 @@ impl<T: Transmit, P: Parcel> Connection<T, P> {
 
 	/// Begin unreliable transmission of provided parcel.
 	/// 
-	/// Unreliable (volatile) parcels are delivered in a best-effort manner, however no re-transmission occurs of the parcel was not received by the other end.
-	/// The order of delivery is not guaranteed, for order-dependent functionality use streams.
+	/// Unreliable (volatile) parcels are delivered in a best-effort manner, however no
+	/// re-transmission occurs of the parcel was not received by the other end. The order
+	/// of delivery is not guaranteed, for order-dependent functionality use streams.
 	/// 
 	/// # Notes
 	/// - May result in network packet dispatch.
@@ -286,8 +293,10 @@ impl<T: Transmit, P: Parcel> Connection<T, P> {
 	/// Write a given slice of bytes to the connection stream.
 	/// 
 	/// # Streams
-	/// Connection streams offer [TCP](https://en.wikipedia.org/wiki/Transmission_Control_Protocol)-like functionality for contiguous streams of data.
-	/// Streams are transmitted with the same network packets as reliable parcels, reducing overall data duplication for lost packets.
+	/// Connection streams offer
+	/// [TCP](https://en.wikipedia.org/wiki/Transmission_Control_Protocol)-like functionality
+	/// for contiguous streams of data. Streams are transmitted with the same network packets
+	/// as reliable parcels, reducing overall data duplication for lost packets.
 	/// 
 	/// # Notes
 	/// - May result in network packet dispatch.
@@ -301,8 +310,10 @@ impl<T: Transmit, P: Parcel> Connection<T, P> {
 	/// Number of bytes written.
 	/// 
 	/// # Streams
-	/// Connection streams offer [TCP](https://en.wikipedia.org/wiki/Transmission_Control_Protocol)-like functionality for contiguous streams of data.
-	/// Streams are transmitted with the same network packets as reliable parcels, reducing overall data duplication for lost packets.
+	/// Connection streams offer
+	/// [TCP](https://en.wikipedia.org/wiki/Transmission_Control_Protocol)-like functionality
+	/// for contiguous streams of data. Streams are transmitted with the same network packets
+	/// as reliable parcels, reducing overall data duplication for lost packets.
 	/// 
 	/// # Notes
 	/// - May result in network packet dispatch.
@@ -316,8 +327,10 @@ impl<T: Transmit, P: Parcel> Connection<T, P> {
 	/// Number of bytes read.
 	/// 
 	/// # Streams
-	/// Connection streams offer [TCP](https://en.wikipedia.org/wiki/Transmission_Control_Protocol)-like functionality for contiguous streams of data.
-	/// Streams are transmitted with the same network packets as reliable parcels, reducing overall data duplication for lost packets.
+	/// Connection streams offer
+	/// [TCP](https://en.wikipedia.org/wiki/Transmission_Control_Protocol)-like functionality
+	/// for contiguous streams of data. Streams are transmitted with the same network packets
+	/// as reliable parcels, reducing overall data duplication for lost packets.
 	/// 
 	/// # Notes
 	/// - Will not read past the end of the provided buffer.
@@ -328,11 +341,14 @@ impl<T: Transmit, P: Parcel> Connection<T, P> {
 	/// Query the amount of bytes ready to be read from the incoming stream.
 	/// 
 	/// # Streams
-	/// Connection streams offer [TCP](https://en.wikipedia.org/wiki/Transmission_Control_Protocol)-like functionality for contiguous streams of data.
-	/// Streams are transmitted with the same network packets as reliable parcels, reducing overall data duplication for lost packets.
+	/// Connection streams offer
+	/// [TCP](https://en.wikipedia.org/wiki/Transmission_Control_Protocol)-like functionality
+	/// for contiguous streams of data. Streams are transmitted with the same network packets
+	/// as reliable parcels, reducing overall data duplication for lost packets.
 	/// 
 	/// # Notes
-	/// - Does not do synchronization that [`read_from_stream()`](struct.Connection.html#method.read_from_stream) performs, as a result there may be more bytes ready to be read than returned.
+	/// - Does not do synchronization that [`read_from_stream()`](Self::read_from_stream)
+	/// performs, as a result there may be more bytes ready to be read than returned.
 	pub fn pending_incoming_stream_bytes(&self) -> Result<usize, ConnectionError> {
 		unimplemented!("Connection functionality is under development")
 	}
@@ -342,7 +358,8 @@ impl<T: Transmit, P: Parcel> PendingConnection<T, P> {
 	/// Attempt to promote the pending connection to a full Connection.
 	/// 
 	/// Receives any pending network packets, supplying their payload to provided predicate.
-	/// If the predicate returns true promotes to full [`Connection`](struct.Connection.html) in [`ConnectionStatus::Open`](enum.ConnectionStatus.html) state.
+	/// If the predicate returns true promotes to full [`Connection`](Self) in
+	/// [`ConnectionStatus::Open`](ConnectionStatus::Open) state.
 	pub fn try_promote<F: FnOnce(&[u8]) -> bool>(mut self, predicate: F) -> Result<Connection<T, P>, PendingConnectionError<T, P>> {
 		if let Err(error) = self.endpoint.recv_all(&mut self.packet_buffer, 0) {
 			match error {

@@ -9,13 +9,13 @@ use super::{Transmit, TransmitError, Listen};
 use super::hash;
 
 use crate::connection::ConnectionId;
-use crate::packet::read_connection_id;
+use crate::packet;
 use crate::StableBuildHasher;
 
 /// A UDP socket that caches packets for multiple connections that can be popped by `recv_all()`.
 /// 
-/// **NOTE**: that the [`Transmit`](../trait.Transmit.html) trait is only implemented for an `Arc<Mutex<ServerUdpEndpoint>>`,
-/// as the server endpoint will not function correctly otherwise.
+/// **NOTE**: that the [`Transmit`](super::Transmit) trait is only implemented for an
+/// `Arc<Mutex<ServerUdpEndpoint>>`, as the server endpoint will not function correctly otherwise.
 #[derive(Debug)]
 pub struct ServerUdpEndpoint<H: StableBuildHasher> {
 	socket: UdpSocket,
@@ -30,7 +30,7 @@ impl<H: StableBuildHasher> Transmit for Arc<Mutex<ServerUdpEndpoint<H>>> {
 	const PACKET_BYTE_COUNT: usize = 1200;
 
 	// 4 bytes reserved for the hash
-	const PACKET_HEADER_BYTE_COUNT: usize = std::mem::size_of::<hash::Hash>();
+	const PACKET_HEADER_BYTE_COUNT: usize = 8;
 
 	#[inline]
 	fn send_to(&self, data: &mut [u8], addr: SocketAddr) -> Result<usize, IoError> {
@@ -88,16 +88,16 @@ impl<H:StableBuildHasher> ServerUdpEndpoint<H> {
 	// TODO: query for connections?
 	// Somewhat conservative 1200 byte estimate of MTU.
 	const PACKET_BYTE_COUNT: usize = 1200;
+	const DATA_OFFSET: usize = 8;
 
 	fn recv_packets(&mut self) -> Result<(), IoError> {
 		loop {
 			match self.socket.recv_from(&mut self.packet_buffer) {
 				Ok((packet_size, addr)) => {
 					if packet_size == Self::PACKET_BYTE_COUNT
-					&& hash::valid_hash(&self.packet_buffer, self.hasher_builder.build_hasher())
+						&& hash::valid_hash(&self.packet_buffer[Self::DATA_OFFSET ..], self.hasher_builder.build_hasher())
 					{
-						// intentionally shadowed connection_id
-						let connection_id = read_connection_id(&self.packet_buffer);
+						let connection_id = packet::read_connection_id(&self.packet_buffer[Self::DATA_OFFSET ..]);
 						if connection_id == 0 {
 							self.connectionless_packets.push_back((addr, self.packet_buffer.clone()));
 						} else if let Some(buffer) = self.connections.get_mut(&connection_id) {

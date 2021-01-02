@@ -1,4 +1,4 @@
-//! Implementations for standard library types.
+//! Implementations of [`ByteSerialize`](super::ByteSerialize) for standard library types.
 
 use super::{ByteSerialize, SerializationError};
 

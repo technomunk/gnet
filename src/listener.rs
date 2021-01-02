@@ -10,7 +10,8 @@ use std::time::Instant;
 
 /// A listener passively listens for new connections.
 /// 
-/// The new connections are pending, letting the application decide whether to accept a particular new connection.
+/// The new connections are pending, letting the application
+/// decide whether to accept a particular new connection.
 pub struct Listener<E: Transmit + Listen + Clone, P: Parcel> {
 	endpoint: E,
 	_message_type: PhantomData<P>,
@@ -39,12 +40,15 @@ impl<E: Transmit + Listen + Clone, P: Parcel> Listener<E, P> {
 
 	/// Attempt to accept an incoming connection using provided predicate.
 	/// 
-	/// Will pop a single connection request from the endpoint, validate the packet and invoke the predicate if the request is valid.
-	/// If the predicate returns `true` the function returns a newly established `Connection`,
-	/// otherwise will return `AcceptError::PredicateFail`.
+	/// Will pop a single connection request from the endpoint, validate the packet and
+	/// invoke the predicate if the request is valid. If the predicate returns `true` the
+	/// function returns a newly established [`Connection`](super::Connection), otherwise
+	/// will returns [`AcceptError::PredicateFail`](AcceptError::PredicateFail).
 	/// 
 	/// ## Notes
-	/// Does NOT block the calling thread, returning NoPendingConnections if there are no pending connections remaining.
+	/// Does NOT block the calling thread, returning
+	/// [`AcceptError::NoPendingConnections`](AcceptError::NoPendingConnections)
+	/// if there are no pending connections remaining.
 	pub fn try_accept<F: FnOnce(SocketAddr, &[u8]) -> bool>(&self, predicate: F) -> Result<Connection<E, P>, AcceptError> {
 		match self.endpoint.pop_connectionless_packet() {
 			Ok((address, packet)) => {

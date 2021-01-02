@@ -24,8 +24,9 @@ pub trait Parcel : ByteSerialize {}
 
 /// Specialized marker for stable hasher builders.
 /// 
-/// Stable in this case means the hashers are seeded in a constant manner on separate machines.
-/// Such behavior is necessary for generating hashes (checksums) for sent data and detecting erroneous network packets.
+/// Stable in this case means the hashers are seeded in a constant manner
+/// on separate machines. Such behavior is necessary for generating hashes
+/// (checksums) for sent data and detecting erroneous network packets.
 pub trait StableBuildHasher : BuildHasher {}
 
 /// Hasher used in unit tests throughout the library.
