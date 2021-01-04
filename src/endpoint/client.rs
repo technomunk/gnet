@@ -11,21 +11,21 @@ use crate::connection::ConnectionId;
 use crate::packet::read_connection_id;
 use crate::StableBuildHasher;
 
-/// Basic implementation of a client-side [`Endpoint`](Endpoint).
+/// Basic implementation of a client-side [`Endpoint`](Transmit).
 ///
 /// Specifically contains an optimization that discards non GNet or wrongly-addressed packets.
 #[derive(Debug)]
-pub struct ClientUdpEndpoint<H: StableBuildHasher> {
+pub struct ClientEndpoint<H: StableBuildHasher> {
 	socket: UdpSocket,
 	hasher_builder: H,
 }
 
-impl<H: StableBuildHasher> Transmit for ClientUdpEndpoint<H> {
+impl<H: StableBuildHasher> Transmit for ClientEndpoint<H> {
 	// Somewhat conservative 1200 byte estimate of MTU.
 	const PACKET_BYTE_COUNT: usize = 1200;
 
 	// 8 bytes reserved for the hash
-	const PACKET_HEADER_BYTE_COUNT: usize = 8;
+	const RESERVED_BYTE_COUNT: usize = 8;
 
 	#[inline]
 	fn send_to(&self, data: &mut [u8], addr: SocketAddr) -> Result<usize, IoError> {
@@ -46,7 +46,7 @@ impl<H: StableBuildHasher> Transmit for ClientUdpEndpoint<H> {
 		loop {
 			match self.socket.recv_from(&mut buffer[work_offset ..]) {
 				Ok((packet_size, _)) => {
-					let data_offset = work_offset + Self::PACKET_HEADER_BYTE_COUNT;
+					let data_offset = work_offset + Self::RESERVED_BYTE_COUNT;
 					if packet_size == Self::PACKET_BYTE_COUNT
 						&& hash::valid_hash(&buffer[work_offset ..], self.hasher_builder.build_hasher())
 						&& (connection_id == 0 || connection_id == read_connection_id(&buffer[data_offset ..])) 
@@ -75,7 +75,7 @@ impl<H: StableBuildHasher> Transmit for ClientUdpEndpoint<H> {
 	}
 }
 
-impl<H: StableBuildHasher> ClientUdpEndpoint<H> {
+impl<H: StableBuildHasher> ClientEndpoint<H> {
 	/// Open a new endpoint on provided local address with provided hasher.
 	/// 
 	/// The hasher will be used to validate packets.
@@ -96,11 +96,11 @@ mod test {
 		let a_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1111));
 		let b_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1112));
 
-		let a = ClientUdpEndpoint::open(a_addr, TestHasherBuilder{}).unwrap();
-		let b = ClientUdpEndpoint::open(b_addr, TestHasherBuilder{}).unwrap();
+		let a = ClientEndpoint::open(a_addr, TestHasherBuilder{}).unwrap();
+		let b = ClientEndpoint::open(b_addr, TestHasherBuilder{}).unwrap();
 
-		const PACKET_OFFSET: usize = ClientUdpEndpoint::<TestHasherBuilder>::PACKET_HEADER_BYTE_COUNT;
-		const PACKET_SIZE: usize = ClientUdpEndpoint::<TestHasherBuilder>::PACKET_BYTE_COUNT;
+		const PACKET_OFFSET: usize = ClientEndpoint::<TestHasherBuilder>::RESERVED_BYTE_COUNT;
+		const PACKET_SIZE: usize = ClientEndpoint::<TestHasherBuilder>::PACKET_BYTE_COUNT;
 
 		let mut packet_header = packet::PacketHeader {
 			connection_id: 1,

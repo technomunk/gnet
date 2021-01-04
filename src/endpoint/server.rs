@@ -17,7 +17,7 @@ use crate::StableBuildHasher;
 /// **NOTE**: that the [`Transmit`](super::Transmit) trait is only implemented for an
 /// `Arc<Mutex<ServerUdpEndpoint>>`, as the server endpoint will not function correctly otherwise.
 #[derive(Debug)]
-pub struct ServerUdpEndpoint<H: StableBuildHasher> {
+pub struct ServerEndpoint<H: StableBuildHasher> {
 	socket: UdpSocket,
 	connections: HashMap<ConnectionId, Vec<u8>>,
 	hasher_builder: H,
@@ -25,12 +25,12 @@ pub struct ServerUdpEndpoint<H: StableBuildHasher> {
 	connectionless_packets: VecDeque<(SocketAddr, Box<[u8]>)>,
 }
 
-impl<H: StableBuildHasher> Transmit for Arc<Mutex<ServerUdpEndpoint<H>>> {
+impl<H: StableBuildHasher> Transmit for Arc<Mutex<ServerEndpoint<H>>> {
 	// Somewhat conservative 1200 byte estimate of MTU.
 	const PACKET_BYTE_COUNT: usize = 1200;
 
 	// 4 bytes reserved for the hash
-	const PACKET_HEADER_BYTE_COUNT: usize = 8;
+	const RESERVED_BYTE_COUNT: usize = 8;
 
 	#[inline]
 	fn send_to(&self, data: &mut [u8], addr: SocketAddr) -> Result<usize, IoError> {
@@ -61,7 +61,7 @@ impl<H: StableBuildHasher> Transmit for Arc<Mutex<ServerUdpEndpoint<H>>> {
 	}
 }
 
-impl<H: StableBuildHasher> Listen for Arc<Mutex<ServerUdpEndpoint<H>>> {
+impl<H: StableBuildHasher> Listen for Arc<Mutex<ServerEndpoint<H>>> {
 	fn allow_connection_id(&self, connection_id: ConnectionId) {
 		let mut endpoint = self.lock().unwrap();
 		endpoint.connections.insert(connection_id, Vec::new());
@@ -84,7 +84,7 @@ impl<H: StableBuildHasher> Listen for Arc<Mutex<ServerUdpEndpoint<H>>> {
 	}
 }
 
-impl<H:StableBuildHasher> ServerUdpEndpoint<H> {
+impl<H:StableBuildHasher> ServerEndpoint<H> {
 	// TODO: query for connections?
 	// Somewhat conservative 1200 byte estimate of MTU.
 	const PACKET_BYTE_COUNT: usize = 1200;

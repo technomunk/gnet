@@ -1,8 +1,8 @@
 //! Definitions of traits an endpoint implementation must provide.
 //!
 //! An endpoint is one of the 2 ends of a virtual connection. It may either
-//! be a simple udp socket ([`ClientUdpEndpoint`](ClientUdpEndpoint)) or have
-//! additional demultiplexing logic ([`ServerUdpEndpoint`](ServerUdpEndpoint)).
+//! be a simple udp socket ([`ClientEndpoint`](ClientEndpoint)) or have
+//! additional demultiplexing logic ([`ServerEndpoint`](ServerEndpoint)).
 
 mod hash;
 mod client;
@@ -53,7 +53,7 @@ pub trait Transmit {
 	/// the 'endpoint' to write checksums or other data for validating the packets.
 	/// 
 	/// **NOTE**: this allows avoiding an extra copy during the sending process.
-	const PACKET_HEADER_BYTE_COUNT: usize;
+	const RESERVED_BYTE_COUNT: usize;
 
 	/// Send provided data to the provided address.
 	/// 
@@ -126,5 +126,5 @@ impl std::error::Error for TransmitError {
 }
 
 // Re-exports
-pub use client::ClientUdpEndpoint;
-pub use server::ServerUdpEndpoint;
+pub use client::ClientEndpoint;
+pub use server::ServerEndpoint;
