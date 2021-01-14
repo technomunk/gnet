@@ -3,7 +3,7 @@
 use std::net::{SocketAddr, UdpSocket};
 use std::io::{Error as IoError, ErrorKind as IoErrorKind};
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use super::{Transmit, TransmitError, Listen};
 use super::hash;
@@ -12,10 +12,12 @@ use crate::connection::ConnectionId;
 use crate::packet;
 use crate::StableBuildHasher;
 
-/// A UDP socket that caches packets for multiple connections that can be popped by `recv_all()`.
+/// A UDP socket that caches packets for multiple connections that can be popped by
+/// [`recv_all()`](Transmit::recv_all).
 /// 
-/// **NOTE**: that the [`Transmit`](super::Transmit) trait is only implemented for an
-/// `Arc<Mutex<ServerUdpEndpoint>>`, as the server endpoint will not function correctly otherwise.
+/// **NOTE**: that the [`Transmit`](Transmit) and [`Listen`](Listen) traits are only implemented
+/// for [`Mutex`](Mutex)`<ServerEndpoint>`, as the server endpoint will not function correctly
+/// otherwise.
 #[derive(Debug)]
 pub struct ServerEndpoint<H: StableBuildHasher> {
 	socket: UdpSocket,
@@ -25,12 +27,58 @@ pub struct ServerEndpoint<H: StableBuildHasher> {
 	connectionless_packets: VecDeque<(SocketAddr, Box<[u8]>)>,
 }
 
-impl<H: StableBuildHasher> Transmit for Arc<Mutex<ServerEndpoint<H>>> {
+impl<H:StableBuildHasher> ServerEndpoint<H> {
 	// Somewhat conservative 1200 byte estimate of MTU.
 	const PACKET_BYTE_COUNT: usize = 1200;
 
 	// 4 bytes reserved for the hash
 	const RESERVED_BYTE_COUNT: usize = 8;
+
+	fn recv_packets(&mut self) -> Result<(), IoError> {
+		loop {
+			match self.socket.recv_from(&mut self.packet_buffer) {
+				Ok((packet_size, addr)) => {
+					if packet_size == Self::PACKET_BYTE_COUNT
+						&& hash::valid_hash(&self.packet_buffer, self.hasher_builder.build_hasher())
+					{
+						let connection_id = packet::read_connection_id(&self.packet_buffer[Self::RESERVED_BYTE_COUNT ..]);
+						if connection_id == 0 {
+							self.connectionless_packets.push_back((addr, self.packet_buffer.clone()));
+						} else if let Some(buffer) = self.connections.get_mut(&connection_id) {
+							buffer.extend_from_slice(&self.packet_buffer);
+						}
+					}
+				},
+				Err(error) => match error.kind() {
+					IoErrorKind::WouldBlock => break,
+					_ => return Err(error),
+				}
+			}
+		};
+		Ok(())
+	}
+
+	/// Construct a new `ServerUdpEndpoint` and bind it to provided local address.
+	#[inline]
+	pub fn open(addr: SocketAddr, hasher_builder: H) -> Result<Self, IoError> {
+		let socket = UdpSocket::bind(addr)?;
+		socket.set_nonblocking(true)?;
+		Ok(Self {
+			socket,
+			connections: HashMap::new(),
+			packet_buffer: Box::new([0; Self::PACKET_BYTE_COUNT]),
+			connectionless_packets: VecDeque::new(),
+			hasher_builder,
+		})
+	}
+}
+
+impl<H: StableBuildHasher> Transmit for Mutex<ServerEndpoint<H>> {
+	// Somewhat conservative 1200 byte estimate of MTU.
+	const PACKET_BYTE_COUNT: usize = ServerEndpoint::<H>::PACKET_BYTE_COUNT;
+
+	// 4 bytes reserved for the hash
+	const RESERVED_BYTE_COUNT: usize = ServerEndpoint::<H>::RESERVED_BYTE_COUNT;
 
 	#[inline]
 	fn send_to(&self, data: &mut [u8], addr: SocketAddr) -> Result<usize, IoError> {
@@ -61,7 +109,7 @@ impl<H: StableBuildHasher> Transmit for Arc<Mutex<ServerEndpoint<H>>> {
 	}
 }
 
-impl<H: StableBuildHasher> Listen for Arc<Mutex<ServerEndpoint<H>>> {
+impl<H: StableBuildHasher> Listen for Mutex<ServerEndpoint<H>> {
 	fn allow_connection_id(&self, connection_id: ConnectionId) {
 		let mut endpoint = self.lock().unwrap();
 		endpoint.connections.insert(connection_id, Vec::new());
@@ -84,47 +132,70 @@ impl<H: StableBuildHasher> Listen for Arc<Mutex<ServerEndpoint<H>>> {
 	}
 }
 
-impl<H:StableBuildHasher> ServerEndpoint<H> {
-	// TODO: query for connections?
-	// Somewhat conservative 1200 byte estimate of MTU.
-	const PACKET_BYTE_COUNT: usize = 1200;
-	const DATA_OFFSET: usize = 8;
+#[cfg(test)]
+mod test {
+	use super::*;
+	use crate::{packet, TestHasherBuilder};
 
-	fn recv_packets(&mut self) -> Result<(), IoError> {
-		loop {
-			match self.socket.recv_from(&mut self.packet_buffer) {
-				Ok((packet_size, addr)) => {
-					if packet_size == Self::PACKET_BYTE_COUNT
-						&& hash::valid_hash(&self.packet_buffer[Self::DATA_OFFSET ..], self.hasher_builder.build_hasher())
-					{
-						let connection_id = packet::read_connection_id(&self.packet_buffer[Self::DATA_OFFSET ..]);
-						if connection_id == 0 {
-							self.connectionless_packets.push_back((addr, self.packet_buffer.clone()));
-						} else if let Some(buffer) = self.connections.get_mut(&connection_id) {
-							buffer.extend_from_slice(&self.packet_buffer);
-						};
-					}
-				},
-				Err(error) => match error.kind() {
-					IoErrorKind::WouldBlock => break,
-					_ => return Err(error),
-				}
-			}
+	#[test]
+	fn server_udp_sends_and_receives() {
+		let a_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1121));
+		let b_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1122));
+
+		let a = Mutex::new(ServerEndpoint::open(a_addr, TestHasherBuilder{}).unwrap());
+		a.allow_connection_id(1);
+		let b = Mutex::new(ServerEndpoint::open(b_addr, TestHasherBuilder{}).unwrap());
+		b.allow_connection_id(1);
+
+		const PACKET_OFFSET: usize = ServerEndpoint::<TestHasherBuilder>::RESERVED_BYTE_COUNT;
+		const PACKET_SIZE: usize = ServerEndpoint::<TestHasherBuilder>::PACKET_BYTE_COUNT;
+
+		let mut packet_header = packet::PacketHeader {
+			connection_id: 1,
+			packet_id: 1.into(),
+			ack_packet_id: Default::default(),
+			ack_packet_mask: 0,
+			signal: Default::default(),
+			prelude: [ 1, 2, 3, 4, ],
 		};
-		Ok(())
-	}
 
-	/// Construct a new `ServerUdpEndpoint` and bind it to provided local address.
-	#[inline]
-	pub fn open(addr: SocketAddr, hasher_builder: H) -> Result<Self, IoError> {
-		let socket = UdpSocket::bind(addr)?;
-		socket.set_nonblocking(true)?;
-		Ok(Self {
-			socket,
-			connections: HashMap::new(),
-			packet_buffer: Box::new([0; Self::PACKET_BYTE_COUNT]),
-			connectionless_packets: VecDeque::new(),
-			hasher_builder,
-		})
+		let mut packet_buffer = vec![0; PACKET_SIZE];
+
+		// Send just 1 packet
+
+		packet::write_header(&mut packet_buffer[PACKET_OFFSET..], packet_header);
+		let send_result = a.send_to(&mut packet_buffer, b_addr);
+
+		assert_eq!(send_result.unwrap(), PACKET_SIZE);
+		
+		packet_buffer.clear();
+		let recv_result = b.recv_all(&mut packet_buffer, 1);
+
+		assert_eq!(recv_result.unwrap(), PACKET_SIZE);
+		assert_eq!(packet_buffer.len(), PACKET_SIZE);
+		assert_eq!(packet_header, *packet::get_header(&packet_buffer[PACKET_OFFSET ..]));
+
+		// Send 2 packets
+
+		packet_header.packet_id = packet_header.packet_id.next();
+		packet::write_header(&mut packet_buffer[PACKET_OFFSET ..], packet_header);
+		let send_result = b.send_to(&mut packet_buffer, a_addr);
+
+		assert_eq!(send_result.unwrap(), PACKET_SIZE);
+
+		packet_header.packet_id = packet_header.packet_id.next();
+		packet::write_header(&mut packet_buffer[PACKET_OFFSET ..], packet_header);
+		let send_result = b.send_to(&mut packet_buffer, a_addr);
+		
+		assert_eq!(send_result.unwrap(), PACKET_SIZE);
+
+		let recv_result = a.recv_all(&mut packet_buffer, 1);
+
+		assert_eq!(recv_result.unwrap(), PACKET_SIZE * 2);
+		assert_eq!(packet_buffer.len(), PACKET_SIZE * 3);
+		let packet_id = packet::get_header(&packet_buffer[PACKET_SIZE + PACKET_OFFSET ..]).packet_id;
+		assert_eq!(packet_id, 2.into());
+		let packet_id = packet::get_header(&packet_buffer[PACKET_SIZE * 2 + PACKET_OFFSET ..]).packet_id;
+		assert_eq!(packet_id, 3.into());
 	}
 }
