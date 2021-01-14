@@ -109,7 +109,7 @@ impl std::fmt::Display for TransmitError {
 		match self {
 			Self::NoPendingPackets => write!(f, "there were no pending packets for provided connection"),
 			Self::Io(error) => {
-				write!(f, "underlying IO error: ");
+				write!(f, "underlying IO error: ")?;
 				error.fmt(f)
 			}
 		}

@@ -25,7 +25,6 @@ pub fn generate_and_write_hash<H: Hasher>(packet: &mut [u8], hasher: H) {
 	debug_assert!(packet.len() > std::mem::size_of::<Hash>());
 	debug_assert!(packet.as_ptr().align_offset(std::mem::align_of::<Hash>()) == 0);
 	let hash = generate_hash(packet, hasher);
-	#[allow(clippy::cast_ptr_alignment)]
 	unsafe { *(packet.as_mut_ptr() as *mut Hash) = hash }
 }
 
