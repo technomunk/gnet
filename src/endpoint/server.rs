@@ -198,4 +198,35 @@ mod test {
 		let packet_id = packet::get_header(&packet_buffer[PACKET_SIZE * 2 + PACKET_OFFSET ..]).packet_id;
 		assert_eq!(packet_id, 3.into());
 	}
+
+	#[test]
+	fn server_udp_listens() {
+		let listener_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1123));
+		let sender_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1124));
+
+		let listener = Mutex::new(ServerEndpoint::open(listener_addr, TestHasherBuilder{}).unwrap());
+		let sender = Mutex::new(ServerEndpoint::open(sender_addr, TestHasherBuilder{}).unwrap());
+
+		const PACKET_SIZE: usize = ServerEndpoint::<TestHasherBuilder>::PACKET_BYTE_COUNT;
+		const PACKET_OFFSET: usize = ServerEndpoint::<TestHasherBuilder>::RESERVED_BYTE_COUNT;
+		
+		let packet_header = packet::PacketHeader::request_connection(4);
+		let mut packet_buffer = vec![0; PACKET_SIZE];
+
+		packet::write_header(&mut packet_buffer[PACKET_OFFSET ..], packet_header);
+		packet::write_data(&mut packet_buffer[PACKET_OFFSET..], b"GNET", 0);
+
+		let send_result = sender.send_to(&mut packet_buffer, listener_addr);
+
+		assert_eq!(send_result.unwrap(), PACKET_SIZE);
+
+		let pop_result = listener.pop_connectionless_packet();
+
+		if let Ok((addr, packet)) = pop_result {
+			assert_eq!(addr, sender_addr);
+			assert_eq!(&packet[..], &packet_buffer[..]);
+		} else {
+			panic!("No packet was popped!");
+		}
+	}
 }
