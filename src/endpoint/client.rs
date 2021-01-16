@@ -1,15 +1,14 @@
 //! Client-specific endpoint implementation.
-
-use std::net::{SocketAddr, UdpSocket};
 use std::io::{Error as IoError, ErrorKind as IoErrorKind};
 use std::iter::repeat;
-
-use super::{Transmit, TransmitError};
-use super::hash;
-use super::hash::{StableBuildHasher};
+use std::net::{SocketAddr, UdpSocket};
 
 use crate::connection::ConnectionId;
 use crate::packet::read_connection_id;
+
+use super::hash;
+use super::hash::StableBuildHasher;
+use super::{Transmit, TransmitError};
 
 /// Basic implementation of a client-side [`Endpoint`](Transmit).
 ///
@@ -38,18 +37,17 @@ impl<H: StableBuildHasher> Transmit for ClientEndpoint<H> {
 		&self,
 		buffer: &mut Vec<u8>,
 		connection_id: ConnectionId,
-	) -> Result<usize, TransmitError>
-	{
+	) -> Result<usize, TransmitError> {
 		let mut recovered_bytes = 0;
 		let mut work_offset = buffer.len();
 		buffer.extend(repeat(0).take(Self::PACKET_BYTE_COUNT));
 		loop {
-			match self.socket.recv_from(&mut buffer[work_offset ..]) {
+			match self.socket.recv_from(&mut buffer[work_offset..]) {
 				Ok((packet_size, _)) => {
 					let data_offset = work_offset + Self::RESERVED_BYTE_COUNT;
 					if packet_size == Self::PACKET_BYTE_COUNT
-						&& hash::valid_hash(&buffer[work_offset ..], self.hasher_builder.build_hasher())
-						&& (connection_id == 0 || connection_id == read_connection_id(&buffer[data_offset ..])) 
+						&& hash::valid_hash(&buffer[work_offset..], self.hasher_builder.build_hasher())
+						&& (connection_id == 0 || connection_id == read_connection_id(&buffer[data_offset..]))
 					{
 						recovered_bytes += packet_size;
 						work_offset = buffer.len();
@@ -62,11 +60,13 @@ impl<H: StableBuildHasher> Transmit for ClientEndpoint<H> {
 					buffer.truncate(buffer.len() - Self::PACKET_BYTE_COUNT);
 					// NOTE the break!
 					break match error.kind() {
-						IoErrorKind::WouldBlock => if recovered_bytes > 0 {
-							Ok(recovered_bytes)
-						} else {
-							Err(TransmitError::NoPendingPackets)
-						},
+						IoErrorKind::WouldBlock => {
+							if recovered_bytes > 0 {
+								Ok(recovered_bytes)
+							} else {
+								Err(TransmitError::NoPendingPackets)
+							}
+						}
 						_ => Err(TransmitError::Io(error)),
 					}
 				}
@@ -77,19 +77,22 @@ impl<H: StableBuildHasher> Transmit for ClientEndpoint<H> {
 
 impl<H: StableBuildHasher> ClientEndpoint<H> {
 	/// Open a new endpoint on provided local address with provided hasher.
-	/// 
+	///
 	/// The hasher will be used to validate packets.
 	pub fn open(addr: SocketAddr, hasher_builder: H) -> Result<Self, IoError> {
 		let socket = UdpSocket::bind(addr)?;
 		socket.set_nonblocking(true)?;
-		Ok(Self { socket, hasher_builder })
+		Ok(Self {
+			socket,
+			hasher_builder,
+		})
 	}
 }
 
 #[cfg(test)]
 mod test {
-	use super::*;
 	use super::hash::TestHasherBuilder;
+	use super::*;
 	use crate::packet;
 
 	#[test]
@@ -97,8 +100,8 @@ mod test {
 		let a_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1111));
 		let b_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1112));
 
-		let a = ClientEndpoint::open(a_addr, TestHasherBuilder{}).unwrap();
-		let b = ClientEndpoint::open(b_addr, TestHasherBuilder{}).unwrap();
+		let a = ClientEndpoint::open(a_addr, TestHasherBuilder {}).unwrap();
+		let b = ClientEndpoint::open(b_addr, TestHasherBuilder {}).unwrap();
 
 		const PACKET_OFFSET: usize = ClientEndpoint::<TestHasherBuilder>::RESERVED_BYTE_COUNT;
 		const PACKET_SIZE: usize = ClientEndpoint::<TestHasherBuilder>::PACKET_BYTE_COUNT;
@@ -116,11 +119,11 @@ mod test {
 
 		// Send just 1 packet
 
-		packet::write_header(&mut packet_buffer[PACKET_OFFSET..], packet_header);
+		packet::write_header(&mut packet_buffer[PACKET_OFFSET ..], packet_header);
 		let send_result = a.send_to(&mut packet_buffer, b_addr);
 
 		assert_eq!(send_result.unwrap(), PACKET_SIZE);
-		
+
 		packet_buffer.clear();
 		let recv_result = b.recv_all(&mut packet_buffer, 1);
 
@@ -139,7 +142,7 @@ mod test {
 		packet_header.packet_id = packet_header.packet_id.next();
 		packet::write_header(&mut packet_buffer[PACKET_OFFSET ..], packet_header);
 		let send_result = b.send_to(&mut packet_buffer, a_addr);
-		
+
 		assert_eq!(send_result.unwrap(), PACKET_SIZE);
 
 		let recv_result = a.recv_all(&mut packet_buffer, 1);

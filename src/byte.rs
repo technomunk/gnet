@@ -12,31 +12,31 @@ pub enum SerializationError {
 
 // TODO: custom #[derive(ByteSerialize)]
 /// A trait for objects that can be written to or read from a byte-stream.
-/// 
+///
 /// Correct implementations of this trait fulfil following predicates:
 /// - A call to [`to_bytes`](Self::to_bytes) must write no more than
 /// [`byte_count`](Self::byte_count) bytes.
 /// - The byte-stream produced by a call to [`to_bytes`](Self::to_bytes) should produce a valid
 /// object on call of [`from_bytes`](Self::from_bytes).
-/// 
+///
 /// `ByteSerialize` is implemented by default for:
 /// - Trivial types. (ex: `u8`, `usize`, `float`).
 /// - Arrays of `ByteSerialize + Default` objects up to size 32.
 /// (ex: `[f32; 3]`, `[[f32; 4]; 4]`, `[u8; 4]`).
 /// - Tuples of `ByteSerialize` objects.
 /// (ex: `(f32, f64, u16)`, `([u16; 4], u16)`, `((i32, isize), usize)`).
-pub trait ByteSerialize : Sized {
+pub trait ByteSerialize: Sized {
 	/// Size of the serialization of the object in bytes.
 	fn byte_count(&self) -> usize;
 
 	/// Serialize self to a byte-stream.
-	/// 
+	///
 	/// The stream is guaranteed to be at least [`self.byte_count()`](Self::byte_count) large.
 	/// Exactly [`self.byte_count()`](Self::byte_count) bytes should be written!
 	fn to_bytes(&self, bytes: &mut [u8]);
 
 	/// Construct Self from a byte-stream.
-	/// 
+	///
 	/// Should produce a constructed instance of [`Self`](Self) and the number of bytes read.
 	/// The number of bytes read should be exactly equal to [`byte_count()`](Self::byte_count)
 	/// of the returned object!

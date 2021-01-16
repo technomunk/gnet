@@ -1,20 +1,20 @@
 //! Server-specific endpoint implementation.
 
-use std::net::{SocketAddr, UdpSocket};
-use std::io::{Error as IoError, ErrorKind as IoErrorKind};
 use std::collections::{HashMap, VecDeque};
+use std::io::{Error as IoError, ErrorKind as IoErrorKind};
+use std::net::{SocketAddr, UdpSocket};
 use std::sync::Mutex;
 
-use super::{Transmit, TransmitError, Listen};
 use super::hash;
 use super::hash::StableBuildHasher;
+use super::{Listen, Transmit, TransmitError};
 
 use crate::connection::ConnectionId;
 use crate::packet;
 
 /// A UDP socket that caches packets for multiple connections that can be popped by
 /// [`recv_all()`](Transmit::recv_all).
-/// 
+///
 /// **NOTE**: that the [`Transmit`](Transmit) and [`Listen`](Listen) traits are only implemented
 /// for [`Mutex`](Mutex)`<ServerEndpoint>`, as the server endpoint will not function correctly
 /// otherwise.
@@ -27,7 +27,7 @@ pub struct ServerEndpoint<H: StableBuildHasher> {
 	connectionless_packets: VecDeque<(SocketAddr, Box<[u8]>)>,
 }
 
-impl<H:StableBuildHasher> ServerEndpoint<H> {
+impl<H: StableBuildHasher> ServerEndpoint<H> {
 	// Somewhat conservative 1200 byte estimate of MTU.
 	const PACKET_BYTE_COUNT: usize = 1200;
 
@@ -41,7 +41,9 @@ impl<H:StableBuildHasher> ServerEndpoint<H> {
 					if packet_size == Self::PACKET_BYTE_COUNT
 						&& hash::valid_hash(&self.packet_buffer, self.hasher_builder.build_hasher())
 					{
-						let connection_id = packet::read_connection_id(&self.packet_buffer[Self::RESERVED_BYTE_COUNT ..]);
+						let connection_id = packet::read_connection_id(
+							&self.packet_buffer[Self::RESERVED_BYTE_COUNT..],
+						);
 						if connection_id == 0 {
 							self.connectionless_packets.push_back((addr, self.packet_buffer.clone()));
 						} else if let Some(buffer) = self.connections.get_mut(&connection_id) {
@@ -52,9 +54,9 @@ impl<H:StableBuildHasher> ServerEndpoint<H> {
 				Err(error) => match error.kind() {
 					IoErrorKind::WouldBlock => break,
 					_ => return Err(error),
-				}
+				},
 			}
-		};
+		}
 		Ok(())
 	}
 
@@ -90,9 +92,8 @@ impl<H: StableBuildHasher> Transmit for Mutex<ServerEndpoint<H>> {
 	fn recv_all(
 		&self,
 		buffer: &mut Vec<u8>,
-		connection_id: ConnectionId
-	) -> Result<usize, TransmitError>
-	{
+		connection_id: ConnectionId,
+	) -> Result<usize, TransmitError> {
 		let mut endpoint = self.lock().unwrap();
 		if let Err(error) = endpoint.recv_packets() {
 			return Err(TransmitError::Io(error));
@@ -134,8 +135,8 @@ impl<H: StableBuildHasher> Listen for Mutex<ServerEndpoint<H>> {
 
 #[cfg(test)]
 mod test {
-	use super::*;
 	use super::hash::TestHasherBuilder;
+	use super::*;
 	use crate::packet;
 
 	#[test]
@@ -143,9 +144,9 @@ mod test {
 		let a_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1121));
 		let b_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1122));
 
-		let a = Mutex::new(ServerEndpoint::open(a_addr, TestHasherBuilder{}).unwrap());
+		let a = Mutex::new(ServerEndpoint::open(a_addr, TestHasherBuilder {}).unwrap());
 		a.allow_connection_id(1);
-		let b = Mutex::new(ServerEndpoint::open(b_addr, TestHasherBuilder{}).unwrap());
+		let b = Mutex::new(ServerEndpoint::open(b_addr, TestHasherBuilder {}).unwrap());
 		b.allow_connection_id(1);
 
 		const PACKET_OFFSET: usize = ServerEndpoint::<TestHasherBuilder>::RESERVED_BYTE_COUNT;
@@ -164,17 +165,17 @@ mod test {
 
 		// Send just 1 packet
 
-		packet::write_header(&mut packet_buffer[PACKET_OFFSET..], packet_header);
+		packet::write_header(&mut packet_buffer[PACKET_OFFSET ..], packet_header);
 		let send_result = a.send_to(&mut packet_buffer, b_addr);
 
 		assert_eq!(send_result.unwrap(), PACKET_SIZE);
-		
+
 		packet_buffer.clear();
 		let recv_result = b.recv_all(&mut packet_buffer, 1);
 
 		assert_eq!(recv_result.unwrap(), PACKET_SIZE);
 		assert_eq!(packet_buffer.len(), PACKET_SIZE);
-		assert_eq!(packet_header, *packet::get_header(&packet_buffer[PACKET_OFFSET ..]));
+		assert_eq!(packet_header, *packet::get_header(&packet_buffer[PACKET_OFFSET..]));
 
 		// Send 2 packets
 
@@ -187,7 +188,7 @@ mod test {
 		packet_header.packet_id = packet_header.packet_id.next();
 		packet::write_header(&mut packet_buffer[PACKET_OFFSET ..], packet_header);
 		let send_result = b.send_to(&mut packet_buffer, a_addr);
-		
+
 		assert_eq!(send_result.unwrap(), PACKET_SIZE);
 
 		let recv_result = a.recv_all(&mut packet_buffer, 1);
@@ -205,17 +206,17 @@ mod test {
 		let listener_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1123));
 		let sender_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1124));
 
-		let listener = Mutex::new(ServerEndpoint::open(listener_addr, TestHasherBuilder{}).unwrap());
-		let sender = Mutex::new(ServerEndpoint::open(sender_addr, TestHasherBuilder{}).unwrap());
+		let listener = Mutex::new(ServerEndpoint::open(listener_addr, TestHasherBuilder {}).unwrap());
+		let sender = Mutex::new(ServerEndpoint::open(sender_addr, TestHasherBuilder {}).unwrap());
 
 		const PACKET_SIZE: usize = ServerEndpoint::<TestHasherBuilder>::PACKET_BYTE_COUNT;
 		const PACKET_OFFSET: usize = ServerEndpoint::<TestHasherBuilder>::RESERVED_BYTE_COUNT;
-		
+
 		let packet_header = packet::PacketHeader::request_connection(4);
 		let mut packet_buffer = vec![0; PACKET_SIZE];
 
 		packet::write_header(&mut packet_buffer[PACKET_OFFSET ..], packet_header);
-		packet::write_data(&mut packet_buffer[PACKET_OFFSET..], b"GNET", 0);
+		packet::write_data(&mut packet_buffer[PACKET_OFFSET ..], b"GNET", 0);
 
 		let send_result = sender.send_to(&mut packet_buffer, listener_addr);
 

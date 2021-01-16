@@ -7,13 +7,13 @@
 //! The payload itself may consist of:
 //! - One or more instances of [`Parcel`](super::Parcel) implementations.
 //! - Part of a data stream.
-//! 
+//!
 //! The GNet uses the headers to transmit metadata, such as
 //! acknowledging packets or sampling the connection latency.
 
+use std::cmp::{Ordering, PartialOrd};
 use std::mem::size_of;
 use std::num::Wrapping;
-use std::cmp::{PartialOrd, Ordering};
 
 use signal::*;
 
@@ -43,7 +43,7 @@ mod signal {
 	}
 
 	/// Compacted bitpatterns for signalling protocol-level information.
-	/// 
+	///
 	/// Consists of:
 	/// | bit(s) | 31-25      | 24           | 23                | 22                 | 21-11           | 10-0         |
 	/// |--------|------------|--------------|-------------------|--------------------|-----------------|--------------|
@@ -54,12 +54,12 @@ mod signal {
 	pub(crate) const CONNECTION_REQUEST_BIT: u32 = 1 << 22;
 	pub(crate) const CONNECTION_CLOSED_BIT: u32 = 1 << 23;
 	pub(crate) const SYNCHRONIZED_BIT: u32 = 1 << 24;
-	
+
 	const SIZE_BITS: u32 = 0x7FF;
 
 	impl SignalBits {
 		/// Sets the signal flags associated with given signal.
-		/// 
+		///
 		/// To read the flag use [`is_signal_set`](SignalBits::is_signal_set) method.
 		#[inline]
 		pub(crate) fn set_signal(&mut self, signal: Signal) {
@@ -69,9 +69,9 @@ mod signal {
 				Signal::Synchronized => self.0 |= SYNCHRONIZED_BIT,
 			}
 		}
-	
+
 		/// Clears the signal flags associated with given signal.
-		/// 
+		///
 		/// To read the flag use [`is_signal_set`](SignalBits::is_signal_set) method.
 		#[inline]
 		pub(crate) fn clear_signal(&mut self, signal: Signal) {
@@ -81,16 +81,16 @@ mod signal {
 				Signal::Synchronized => self.0 &= !SYNCHRONIZED_BIT,
 			}
 		}
-	
+
 		/// Checks if the signal flags associated with given signal have been set.
-		/// 
+		///
 		/// The flags are set with [`set_signal`](SignalBits::set_signal) and cleared with [`clear_signal`](SignalBits::clear_signal) methods.
 		#[inline]
 		pub(crate) fn is_signal_set(&self, signal: Signal) -> bool {
 			match signal {
 				Signal::ConnectionRequest => (self.0 & CONNECTION_REQUEST_BIT) == CONNECTION_REQUEST_BIT,
 				Signal::ConnectionClose => (self.0 & CONNECTION_CLOSED_BIT) == CONNECTION_CLOSED_BIT,
-				Signal::Synchronized => (self. 0 & SYNCHRONIZED_BIT) == SYNCHRONIZED_BIT,
+				Signal::Synchronized => (self.0 & SYNCHRONIZED_BIT) == SYNCHRONIZED_BIT,
 			}
 		}
 
@@ -119,13 +119,15 @@ mod signal {
 		pub(crate) fn get_stream_size(&self) -> u16 {
 			(self.0 & SIZE_BITS) as u16
 		}
-	
+
 		/// Create a *KeepAlive* protocol bitpattern.
-		/// 
+		///
 		/// KeepAlive packets contain no payload, they simply signal update the connection timing.
 		#[inline]
-		pub(crate) fn keep_alive() -> Self { Self(0) }
-	
+		pub(crate) fn keep_alive() -> Self {
+			Self(0)
+		}
+
 		/// Create a bitpattern associated with a connection request.
 		#[inline]
 		pub(crate) fn request_connection(payload_len: u16) -> Self {
@@ -284,7 +286,7 @@ impl PacketHeader {
 #[inline]
 pub(crate) fn get_data_segment(packet: &[u8]) -> &[u8] {
 	debug_assert!(packet.len() >= size_of::<PacketHeader>());
-	&packet[size_of::<PacketHeader>()..]
+	&packet[size_of::<PacketHeader>() ..]
 }
 
 /// Get the valid stream portion of the packet
@@ -311,15 +313,14 @@ pub(crate) fn get_stream_segment(packet: &[u8]) -> &[u8] {
 #[inline]
 pub(crate) fn get_mut_data_segment(packet: &mut [u8]) -> &mut [u8] {
 	debug_assert!(packet.len() >= size_of::<PacketHeader>());
-	&mut packet[size_of::<PacketHeader>()..]
+	&mut packet[size_of::<PacketHeader>() ..]
 }
 
 /// Get the header segment of a packet.
 #[inline]
 pub(crate) fn get_header(packet: &[u8]) -> &PacketHeader {
 	debug_assert!(packet.len() >= size_of::<PacketHeader>());
-	debug_assert!(packet.as_ptr().align_offset(std::mem::align_of::<PacketHeader>()) == 0);
-	#[allow(clippy::cast_ptr_alignment)]
+	debug_assert_eq!(packet.as_ptr().align_offset(std::mem::align_of::<PacketHeader>()), 0);
 	unsafe { &*(packet.as_ptr() as *const PacketHeader) }
 }
 
@@ -328,14 +329,14 @@ pub(crate) fn get_header(packet: &[u8]) -> &PacketHeader {
 pub(crate) fn write_data(packet: &mut [u8], data: &[u8], offset: usize) {
 	debug_assert!(packet.len() >= size_of::<PacketHeader>());
 	let offset = offset + size_of::<PacketHeader>();
-	packet[offset .. offset + data.len()].copy_from_slice(data)
+	packet[offset..offset + data.len()].copy_from_slice(data)
 }
 
 /// Clear the remainder of the data segment of the packet starting at provided offset.
 pub(crate) fn clear_remaining_data(packet: &mut [u8], offset: usize) {
 	debug_assert!(packet.len() >= size_of::<PacketHeader>());
 	let offset = offset + size_of::<PacketHeader>();
-	for i in packet[offset .. ].iter_mut() {
+	for i in packet[offset..].iter_mut() {
 		*i = 0
 	}
 }
@@ -345,7 +346,6 @@ pub(crate) fn clear_remaining_data(packet: &mut [u8], offset: usize) {
 pub(crate) fn write_header(packet: &mut [u8], header: PacketHeader) {
 	debug_assert!(packet.len() >= size_of::<PacketHeader>());
 	debug_assert_eq!(packet.as_ptr().align_offset(std::mem::align_of::<PacketHeader>()), 0);
-	#[allow(clippy::cast_ptr_alignment)]
 	unsafe { *(packet.as_mut_ptr() as *mut PacketHeader) = header }
 }
 
@@ -380,14 +380,14 @@ mod test {
 	#[test]
 	fn packet_header_acknowledgement_is_correct() {
 		let mut header = PacketHeader::request_connection(0);
-		
+
 		header.ack_packet_id = 17.into();
 		header.ack_packet_mask = 7 << 14;
 
 		assert_eq!(header.acknowledges(17.into()), false);
 
 		header.signal.clear_signal(Signal::ConnectionRequest);
-		
+
 		assert_eq!(header.acknowledges(17.into()), true);
 		assert_eq!(header.acknowledges(0.into()), true);
 		assert_eq!(header.acknowledges(1.into()), true);

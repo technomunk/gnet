@@ -43,11 +43,15 @@ impl_byte_serialize_numeric!(u128, i128);
 
 impl ByteSerialize for bool {
 	#[inline]
-	fn byte_count(&self) -> usize { 1 }
+	fn byte_count(&self) -> usize {
+		1
+	}
+
 	#[inline]
 	fn to_bytes(&self, bytes: &mut [u8]) {
 		bytes[0] = *self as u8;
 	}
+
 	#[inline]
 	fn from_bytes(bytes: &[u8]) -> Result<(Self, usize), SerializationError> {
 		if bytes.is_empty() {
@@ -149,7 +153,7 @@ macro_rules! peel_impl_byte_serialize_tuple {
 	($first:expr, $(($name:ident, $element:ident, $index:tt),)*) => { impl_byte_serialize_tuple!{$(($name, $element, $index),)*} }
 }
 
-impl_byte_serialize_tuple!{ (T11, e11, 11), (T10, e10, 10), (T9, e9, 9), (T8, e8, 8), (T7, e7, 7), (T6, e6, 6), (T5, e5, 5), (T4, e4, 4), (T3, e3, 3), (T2, e2, 2), (T1, e1, 1), (T0, e0, 0),}
+impl_byte_serialize_tuple! { (T11, e11, 11), (T10, e10, 10), (T9, e9, 9), (T8, e8, 8), (T7, e7, 7), (T6, e6, 6), (T5, e5, 5), (T4, e4, 4), (T3, e3, 3), (T2, e2, 2), (T1, e1, 1), (T0, e0, 0), }
 
 #[cfg(test)]
 mod test {
@@ -177,7 +181,7 @@ mod test {
 	fn array_serializes() {
 		let original = [0.1, 0.2, 0.5, 1e-6];
 		let mut bytes = [0; 16];
-		
+
 		assert_eq!(original.byte_count(), 16);
 
 		original.to_bytes(&mut bytes);
@@ -212,7 +216,7 @@ mod test {
 		let mut bytes = [0xFF; 4];
 
 		assert_eq!(original.byte_count(), 3);
-		
+
 		original.to_bytes(&mut bytes);
 
 		assert_eq!(bytes, [0x01, 0x00, 0x01, 0xFF]);
@@ -246,7 +250,7 @@ mod test {
 		let mut bytes = [0xFF; 8];
 
 		assert_eq!(original.byte_count(), 8);
-		
+
 		original.to_bytes(&mut bytes);
 
 		let pi_bytes = (std::f64::consts::PI as f32).to_le_bytes();
@@ -261,7 +265,7 @@ mod test {
 
 	#[test]
 	fn twelve_element_tuple_serializes() {
-		type TestedType = (u8, i8, u16, i16, u32, i32, u64, i64, [u8; 1], [i8; 1], [u8; 2], [i8; 2]);
+		type TestedType = ( u8, i8, u16, i16, u32, i32, u64, i64, [u8; 1], [i8; 1], [u8; 2], [i8; 2], );
 		const EXPECTED_BYTE_COUNT: usize = 36;
 
 		let original: TestedType = (0, 1, 2, 3, 4, 5, 6, 7, [8], [9], [1, 0], [1, 1]);

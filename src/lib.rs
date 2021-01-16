@@ -2,22 +2,19 @@
 // TODO: list important traits and structs
 
 #![warn(clippy::all)]
-
 #![cfg_attr(debug_assertions, allow(dead_code, unused_imports, unused_variables))]
 
 pub mod byte;
 pub mod connection;
-pub mod packet;
 pub mod endpoint;
 pub mod listener;
+pub mod packet;
 
-use std::hash::BuildHasher;
-
-// TODO: consider whether this is necessary
-pub use connection::{Connection, PendingConnection, ConnectionError, PendingConnectionError};
-pub use endpoint::{Transmit, Listen, ClientEndpoint, ServerEndpoint};
+pub use connection::{Connection, ConnectionError, PendingConnection, PendingConnectionError};
+pub use endpoint::{ClientEndpoint, ServerEndpoint};
+pub use listener::{AcceptError, ConnectionListener};
 
 use crate::byte::ByteSerialize;
 
 /// Possible message that is passed by connections.
-pub trait Parcel : ByteSerialize {}
+pub trait Parcel: ByteSerialize {}
