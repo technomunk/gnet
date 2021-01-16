@@ -4,6 +4,7 @@ use crate::connection::{Connection, ConnectionId, ConnectionStatus};
 use crate::endpoint::{Listen, Transmit, TransmitError};
 use crate::packet;
 use crate::Parcel;
+
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::time::Instant;
@@ -32,7 +33,21 @@ pub enum AcceptError {
 	NoPendingConnections,
 }
 
+/// A possible result of acceptor function.
+pub enum AcceptDecision {
+	/// Allow the new connection. The [`try_accept()`](ConnectionListener::try_accept)
+	/// will return a new connection.
+	Allow,
+	/// Actively refuse the new connection, sending a packet informing the client of the decision.
+	Reject,
+	/// Ignore the request. The client will not be informed of the failure to connect.
+	Ignore,
+}
+
 impl<E: Transmit + Listen + Clone, P: Parcel> ConnectionListener<E, P> {
+	// TODO: https://github.com/rust-lang/rust/issues/8995
+	// type AcceptFn = FnOnce(SocketAddr, &[u8]) -> AcceptDecision;
+
 	/// Construct a new listener using provided endpoint.
 	pub fn new(endpoint: E) -> Self {
 		Self {
@@ -44,30 +59,36 @@ impl<E: Transmit + Listen + Clone, P: Parcel> ConnectionListener<E, P> {
 	/// Attempt to accept an incoming connection using provided predicate.
 	///
 	/// Will pop a single connection request from the endpoint, validate the packet and
-	/// invoke the predicate if the request is valid. If the predicate returns `true` the
-	/// function returns a newly established [`Connection`](super::Connection), otherwise
-	/// will returns [`AcceptError::PredicateFail`](AcceptError::PredicateFail).
+	/// invoke the predicate if the request is valid. If the predicate returns
+	/// [`AcceptDecision::Allow`](AcceptDecision::Allow) the function will return a newly
+	/// established [`Connection`](super::Connection), otherwise it will return
+	/// [`AcceptError::PredicateFail`](AcceptError::PredicateFail).
 	///
 	/// ## Notes
 	/// Does NOT block the calling thread, returning
 	/// [`AcceptError::NoPendingConnections`](AcceptError::NoPendingConnections)
 	/// if there are no pending connections remaining.
-	pub fn try_accept<F: FnOnce(SocketAddr, &[u8]) -> bool>(
+	pub fn try_accept<F: FnOnce(SocketAddr, &[u8]) -> AcceptDecision>(
 		&self,
 		predicate: F,
 	) -> Result<Connection<E, P>, AcceptError> {
 		match self.endpoint.pop_connectionless_packet() {
 			Ok((address, packet)) => {
 				if Self::is_valid_connection_request_packet(&packet) {
-					if predicate(address, packet::get_stream_segment(&packet)) {
-						// TODO: handle ids
-						Ok(Connection::opened(
-							self.endpoint.clone(),
-							Default::default(),
-							address,
-						))
-					} else {
-						Err(AcceptError::PredicateFail)
+					match predicate(address, packet::get_stream_segment(&packet[E::RESERVED_BYTE_COUNT ..])) {
+						AcceptDecision::Allow => {
+							// TODO: consider sending an accept packet
+							Ok(Connection::opened(
+								self.endpoint.clone(),
+								Default::default(), // TODO: figure out connection_id
+								address,
+							))
+						},
+						AcceptDecision::Reject => {
+							// TODO: send reject packet
+							Err(AcceptError::PredicateFail)
+						},
+						AcceptDecision::Ignore => Err(AcceptError::PredicateFail),
 					}
 				} else {
 					Err(AcceptError::InvalidRequest(address))
