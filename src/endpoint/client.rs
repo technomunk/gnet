@@ -6,10 +6,10 @@ use std::iter::repeat;
 
 use super::{Transmit, TransmitError};
 use super::hash;
+use super::hash::{StableBuildHasher};
 
 use crate::connection::ConnectionId;
 use crate::packet::read_connection_id;
-use crate::StableBuildHasher;
 
 /// Basic implementation of a client-side [`Endpoint`](Transmit).
 ///
@@ -89,7 +89,8 @@ impl<H: StableBuildHasher> ClientEndpoint<H> {
 #[cfg(test)]
 mod test {
 	use super::*;
-	use crate::{packet, TestHasherBuilder};
+	use super::hash::TestHasherBuilder;
+	use crate::packet;
 
 	#[test]
 	fn client_udp_sends_and_receives() {

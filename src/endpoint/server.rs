@@ -7,10 +7,10 @@ use std::sync::Mutex;
 
 use super::{Transmit, TransmitError, Listen};
 use super::hash;
+use super::hash::StableBuildHasher;
 
 use crate::connection::ConnectionId;
 use crate::packet;
-use crate::StableBuildHasher;
 
 /// A UDP socket that caches packets for multiple connections that can be popped by
 /// [`recv_all()`](Transmit::recv_all).
@@ -135,7 +135,8 @@ impl<H: StableBuildHasher> Listen for Mutex<ServerEndpoint<H>> {
 #[cfg(test)]
 mod test {
 	use super::*;
-	use crate::{packet, TestHasherBuilder};
+	use super::hash::TestHasherBuilder;
+	use crate::packet;
 
 	#[test]
 	fn server_udp_sends_and_receives() {

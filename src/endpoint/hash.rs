@@ -3,7 +3,7 @@
 pub type Hash = u32;
 
 use std::mem::size_of;
-use std::hash::Hasher;
+use std::hash::{BuildHasher, Hasher};
 
 /// Read the hash from the packet header.
 pub fn read_hash(packet: &[u8]) -> Hash {
@@ -32,3 +32,26 @@ pub fn generate_and_write_hash<H: Hasher>(packet: &mut [u8], hasher: H) {
 pub fn valid_hash<H: Hasher>(packet: &[u8], hasher: H) -> bool {
 	generate_hash(packet, hasher) == read_hash(packet)
 }
+
+/// Specialized marker for stable hasher builders.
+/// 
+/// Stable in this case means the hashers are seeded in a constant manner
+/// on separate machines. Such behavior is necessary for generating hashes
+/// (checksums) for sent data and detecting erroneous network packets.
+pub trait StableBuildHasher : BuildHasher {}
+
+/// Hasher used in unit tests throughout the library.
+#[cfg(test)]
+pub(crate) type TestHasher = hashers::fnv::FNV1aHasher32;
+
+#[cfg(test)]
+pub(crate) struct TestHasherBuilder();
+
+#[cfg(test)]
+impl BuildHasher for TestHasherBuilder {
+	type Hasher = TestHasher;
+	fn build_hasher(&self) -> Self::Hasher { TestHasher::default() }
+}
+
+#[cfg(test)]
+impl StableBuildHasher for TestHasherBuilder {}
