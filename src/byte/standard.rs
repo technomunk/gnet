@@ -41,6 +41,21 @@ impl_byte_serialize_numeric!(u32, i32, f32);
 impl_byte_serialize_numeric!(u64, i64, f64);
 impl_byte_serialize_numeric!(u128, i128);
 
+impl ByteSerialize for () {
+	#[inline]
+	fn byte_count(&self) -> usize {
+		0
+	}
+
+	#[inline]
+	fn to_bytes(&self, _: &mut [u8]) {}
+
+	#[inline]
+	fn from_bytes(_: &[u8]) -> Result<(Self, usize), SerializationError> {
+		Ok(((), 0))
+	}
+}
+
 impl ByteSerialize for bool {
 	#[inline]
 	fn byte_count(&self) -> usize {

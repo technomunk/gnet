@@ -20,6 +20,7 @@ pub enum SerializationError {
 /// object on call of [`from_bytes`](Self::from_bytes).
 ///
 /// `ByteSerialize` is implemented by default for:
+/// - Empty type. (`()`)
 /// - Trivial types. (ex: `u8`, `usize`, `float`).
 /// - Arrays of `ByteSerialize + Default` objects up to size 32.
 /// (ex: `[f32; 3]`, `[[f32; 4]; 4]`, `[u8; 4]`).

@@ -10,6 +10,8 @@ mod server;
 
 use std::io::Error as IoError;
 use std::net::SocketAddr;
+use std::rc::Rc;
+use std::sync::Arc;
 
 use super::connection::ConnectionId;
 
@@ -133,6 +135,68 @@ impl std::error::Error for TransmitError {
 			Self::NoPendingPackets => None,
 			Self::Io(error) => Some(error),
 		}
+	}
+}
+
+impl<T: Transmit> Transmit for Rc<T> {
+	const PACKET_BYTE_COUNT: usize = T::PACKET_BYTE_COUNT;
+	const RESERVED_BYTE_COUNT: usize = T::RESERVED_BYTE_COUNT;
+
+	fn send_to(&self, data: &mut [u8], addr: SocketAddr) -> Result<usize, IoError> {
+		T::send_to(self, data, addr)
+	}
+
+	fn recv_all(
+		&self,
+		buffer: &mut Vec<u8>,
+		connection_id: ConnectionId
+	) -> Result<usize, TransmitError> {
+		T::recv_all(self, buffer, connection_id)
+	}
+}
+
+impl<T: Transmit> Transmit for Arc<T> {
+	const PACKET_BYTE_COUNT: usize = T::PACKET_BYTE_COUNT;
+	const RESERVED_BYTE_COUNT: usize = T::RESERVED_BYTE_COUNT;
+
+	fn send_to(&self, data: &mut [u8], addr: SocketAddr) -> Result<usize, IoError> {
+		T::send_to(self, data, addr)
+	}
+
+	fn recv_all(
+		&self,
+		buffer: &mut Vec<u8>,
+		connection_id: ConnectionId
+	) -> Result<usize, TransmitError> {
+		T::recv_all(self, buffer, connection_id)
+	}
+}
+
+impl<L: Listen> Listen for Rc<L> {
+	fn allow_connection_id(&self, connection_id: ConnectionId) {
+		L::allow_connection_id(self, connection_id)
+	}
+
+	fn block_connection_id(&self, connection_id: ConnectionId) {
+		L::block_connection_id(self, connection_id)
+	}
+
+	fn pop_connectionless_packet(&self) -> Result<(SocketAddr, Box<[u8]>), TransmitError> {
+		L::pop_connectionless_packet(self)
+	}
+}
+
+impl<L: Listen> Listen for Arc<L> {
+	fn allow_connection_id(&self, connection_id: ConnectionId) {
+		L::allow_connection_id(self, connection_id)
+	}
+
+	fn block_connection_id(&self, connection_id: ConnectionId) {
+		L::block_connection_id(self, connection_id)
+	}
+
+	fn pop_connectionless_packet(&self) -> Result<(SocketAddr, Box<[u8]>), TransmitError> {
+		L::pop_connectionless_packet(self)
 	}
 }
 

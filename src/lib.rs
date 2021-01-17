@@ -18,3 +18,6 @@ use crate::byte::ByteSerialize;
 
 /// Possible message that is passed by connections.
 pub trait Parcel: ByteSerialize {}
+
+#[cfg(test)]
+impl Parcel for () {}

@@ -101,7 +101,7 @@ impl<E: Transmit + Listen + Clone, P: Parcel> ConnectionListener<E, P> {
 	/// Check that provided packet is a valid connection-request one
 	#[inline]
 	fn is_valid_connection_request_packet(packet: &[u8]) -> bool {
-		let header = packet::get_header(&packet);
+		let header = packet::get_header(&packet[E::RESERVED_BYTE_COUNT ..]);
 
 		packet.len() == E::PACKET_BYTE_COUNT
 			&& header.connection_id == 0
@@ -117,5 +117,100 @@ impl From<TransmitError> for AcceptError {
 		} else {
 			Self::Transmit(error)
 		}
+	}
+}
+
+#[cfg(test)]
+mod test {
+	use std::sync::{Arc, Mutex};
+	
+	use super::*;
+
+	use crate::packet;
+	use crate::endpoint::{ServerEndpoint, ClientEndpoint, TestHasherBuilder};
+
+	#[test]
+	fn listener_accepts() {
+		let listener_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1211));
+		let client_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1212));
+
+		let listener = {
+			let endpoint = ServerEndpoint::open(listener_addr, TestHasherBuilder {}).unwrap();
+			let endpoint = Arc::new(Mutex::new(endpoint));
+			ConnectionListener::<_, ()>::new(endpoint)
+		};
+		let client = ClientEndpoint::open(client_addr, TestHasherBuilder {}).unwrap();
+
+		const PACKET_SIZE: usize = 1200;
+		const PACKET_OFFSET: usize = 8;
+
+		assert_eq!(PACKET_SIZE, Arc::<Mutex<ServerEndpoint<TestHasherBuilder>>>::PACKET_BYTE_COUNT);
+		assert_eq!(PACKET_SIZE, ClientEndpoint::<TestHasherBuilder>::PACKET_BYTE_COUNT);
+		assert_eq!(PACKET_OFFSET, Arc::<Mutex<ServerEndpoint<TestHasherBuilder>>>::RESERVED_BYTE_COUNT);
+		assert_eq!(PACKET_OFFSET, ClientEndpoint::<TestHasherBuilder>::RESERVED_BYTE_COUNT);
+
+		let packet_header = packet::PacketHeader::request_connection(4);
+		let mut packet_buffer = vec![0; PACKET_SIZE];
+
+		packet::write_header(&mut packet_buffer[PACKET_OFFSET ..], packet_header);
+		packet::write_data(&mut packet_buffer[PACKET_OFFSET ..], b"GNET", 0);
+
+		let send_result = client.send_to(&mut packet_buffer, listener_addr);
+
+		assert_eq!(send_result.unwrap(), PACKET_SIZE);
+
+		let accept_result = listener.try_accept(|addr, payload| -> AcceptDecision {
+			if addr == client_addr && b"GNET" == payload {
+				AcceptDecision::Allow
+			} else {
+				AcceptDecision::Reject
+			}
+		});
+
+		assert!(accept_result.is_ok());
+
+		todo!("Send a packet through the connection")
+	}
+
+	#[test]
+	fn listener_denies() {
+		let listener_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1211));
+		let client_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1212));
+
+		let listener = {
+			let endpoint = ServerEndpoint::open(listener_addr, TestHasherBuilder {}).unwrap();
+			let endpoint = Arc::new(Mutex::new(endpoint));
+			ConnectionListener::<_, ()>::new(endpoint)
+		};
+		let client = ClientEndpoint::open(client_addr, TestHasherBuilder {}).unwrap();
+
+		const PACKET_SIZE: usize = 1200;
+		const PACKET_OFFSET: usize = 8;
+
+		assert_eq!(PACKET_SIZE, Arc::<Mutex<ServerEndpoint<TestHasherBuilder>>>::PACKET_BYTE_COUNT);
+		assert_eq!(PACKET_SIZE, ClientEndpoint::<TestHasherBuilder>::PACKET_BYTE_COUNT);
+		assert_eq!(PACKET_OFFSET, Arc::<Mutex<ServerEndpoint<TestHasherBuilder>>>::RESERVED_BYTE_COUNT);
+		assert_eq!(PACKET_OFFSET, ClientEndpoint::<TestHasherBuilder>::RESERVED_BYTE_COUNT);
+
+		let packet_header = packet::PacketHeader::request_connection(4);
+		let mut packet_buffer = vec![0; PACKET_SIZE];
+
+		packet::write_header(&mut packet_buffer[PACKET_OFFSET ..], packet_header);
+		packet::write_data(&mut packet_buffer[PACKET_OFFSET ..], b"GNET", 0);
+
+		let send_result = client.send_to(&mut packet_buffer, listener_addr);
+
+		assert_eq!(send_result.unwrap(), PACKET_SIZE);
+
+		let accept_result = listener.try_accept(|_, _| -> AcceptDecision {
+			AcceptDecision::Reject
+		});
+
+		if let Err(AcceptError::PredicateFail) = accept_result {
+		} else {
+			panic!("try_accept() did not fail as expected!");
+		}
+		
+		todo!("Check that the client endpoint receives a cancel")
 	}
 }

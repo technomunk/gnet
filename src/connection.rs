@@ -278,7 +278,7 @@ impl<T: Transmit, P: Parcel> Connection<T, P> {
 	///
 	/// Will query the socket, pop any pending network packets and finally pop a parcel.
 	pub fn pop_parcel(&mut self) -> Result<(P, [u8; 4]), ConnectionError> {
-		unimplemented!("Connection functionality is under development")
+		todo!()
 	}
 
 	/// Begin reliable transmission of provided parcel.
@@ -290,7 +290,7 @@ impl<T: Transmit, P: Parcel> Connection<T, P> {
 	/// # Notes
 	/// - May result in network packet dispatch.
 	pub fn push_reliable_parcel(&mut self, parcel: P) -> Result<(), ConnectionError> {
-		unimplemented!("Connection functionality is under development")
+		todo!()
 	}
 
 	/// Begin unreliable transmission of provided parcel.
@@ -302,7 +302,7 @@ impl<T: Transmit, P: Parcel> Connection<T, P> {
 	/// # Notes
 	/// - May result in network packet dispatch.
 	pub fn push_volatile_parcel(&mut self, parcel: P) -> Result<(), ConnectionError> {
-		unimplemented!("Connection functionality is under development")
+		todo!()
 	}
 
 	/// Write a given slice of bytes to the connection stream.
@@ -316,7 +316,7 @@ impl<T: Transmit, P: Parcel> Connection<T, P> {
 	/// # Notes
 	/// - May result in network packet dispatch.
 	pub fn write_bytes_to_stream(&mut self, bytes: &[u8]) -> Result<(), ConnectionError> {
-		unimplemented!("Connection functionality is under development")
+		todo!()
 	}
 
 	/// Write a given byte-serializeable item to the connection stream.
@@ -336,7 +336,7 @@ impl<T: Transmit, P: Parcel> Connection<T, P> {
 		&mut self,
 		item: &B,
 	) -> Result<usize, ConnectionError> {
-		unimplemented!("Connection functionality is under development")
+		todo!()
 	}
 
 	/// Attempt to read data from the connection stream into the provided buffer.
@@ -353,7 +353,7 @@ impl<T: Transmit, P: Parcel> Connection<T, P> {
 	/// # Notes
 	/// - Will not read past the end of the provided buffer.
 	pub fn read_from_stream(&mut self, buffer: &mut [u8]) -> Result<usize, ConnectionError> {
-		unimplemented!("Connection functionality is under development")
+		todo!()
 	}
 
 	/// Query the amount of bytes ready to be read from the incoming stream.
@@ -368,7 +368,7 @@ impl<T: Transmit, P: Parcel> Connection<T, P> {
 	/// - Does not do synchronization that [`read_from_stream()`](Self::read_from_stream)
 	/// performs, as a result there may be more bytes ready to be read than returned.
 	pub fn pending_incoming_stream_bytes(&self) -> Result<usize, ConnectionError> {
-		unimplemented!("Connection functionality is under development")
+		todo!()
 	}
 }
 
