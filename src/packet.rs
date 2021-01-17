@@ -37,7 +37,7 @@ mod signal {
 		// (parcel bytes == 0, stream bytes => payload size)
 		ConnectionRequest,
 		/// The connection is about to be closed.
-		ConnectionClose,
+		ConnectionClosed,
 		/// This packet's id field is valid and should be acknowledged.
 		Synchronized,
 	}
@@ -65,7 +65,7 @@ mod signal {
 		pub(crate) fn set_signal(&mut self, signal: Signal) {
 			match signal {
 				Signal::ConnectionRequest => self.0 |= CONNECTION_REQUEST_BIT,
-				Signal::ConnectionClose => self.0 |= CONNECTION_CLOSED_BIT,
+				Signal::ConnectionClosed => self.0 |= CONNECTION_CLOSED_BIT,
 				Signal::Synchronized => self.0 |= SYNCHRONIZED_BIT,
 			}
 		}
@@ -77,7 +77,7 @@ mod signal {
 		pub(crate) fn clear_signal(&mut self, signal: Signal) {
 			match signal {
 				Signal::ConnectionRequest => self.0 &= !CONNECTION_REQUEST_BIT,
-				Signal::ConnectionClose => self.0 &= !CONNECTION_CLOSED_BIT,
+				Signal::ConnectionClosed => self.0 &= !CONNECTION_CLOSED_BIT,
 				Signal::Synchronized => self.0 &= !SYNCHRONIZED_BIT,
 			}
 		}
@@ -89,34 +89,34 @@ mod signal {
 		pub(crate) fn is_signal_set(&self, signal: Signal) -> bool {
 			match signal {
 				Signal::ConnectionRequest => (self.0 & CONNECTION_REQUEST_BIT) == CONNECTION_REQUEST_BIT,
-				Signal::ConnectionClose => (self.0 & CONNECTION_CLOSED_BIT) == CONNECTION_CLOSED_BIT,
+				Signal::ConnectionClosed => (self.0 & CONNECTION_CLOSED_BIT) == CONNECTION_CLOSED_BIT,
 				Signal::Synchronized => (self.0 & SYNCHRONIZED_BIT) == SYNCHRONIZED_BIT,
 			}
 		}
 
 		/// Set the byte-count of the parcel portion of the packet to given value.
 		#[inline]
-		pub(crate) fn set_parcel_size(&mut self, len: u16) {
-			debug_assert_eq!(len & SIZE_BITS as u16, len);
-			self.0 = (self.0 & !(SIZE_BITS << 11)) | ((len as u32) << 11);
+		pub(crate) fn set_parcel_byte_count(&mut self, count: u16) {
+			debug_assert_eq!(count & SIZE_BITS as u16, count);
+			self.0 = (self.0 & !(SIZE_BITS << 11)) | ((count as u32) << 11);
 		}
 
 		/// Get the byte-count of the parcel potion of the packet
 		#[inline]
-		pub(crate) fn get_parcel_size(&self) -> u16 {
+		pub(crate) fn get_parcel_byte_count(&self) -> u16 {
 			((self.0 & (SIZE_BITS << 11)) >> 11) as u16
 		}
 
 		/// Set the byte-count of the stream portion of the packet to given value.
 		#[inline]
-		pub(crate) fn set_stream_size(&mut self, len: u16) {
-			debug_assert_eq!(len & SIZE_BITS as u16, len);
-			self.0 = (self.0 & !SIZE_BITS) | len as u32;
+		pub(crate) fn set_stream_byte_count(&mut self, count: u16) {
+			debug_assert_eq!(count & SIZE_BITS as u16, count);
+			self.0 = (self.0 & !SIZE_BITS) | count as u32;
 		}
 
 		/// Get the byte-count of the stream potion of the packet
 		#[inline]
-		pub(crate) fn get_stream_size(&self) -> u16 {
+		pub(crate) fn get_stream_byte_count(&self) -> u16 {
 			(self.0 & SIZE_BITS) as u16
 		}
 
@@ -130,26 +130,33 @@ mod signal {
 
 		/// Create a bitpattern associated with a connection request.
 		#[inline]
-		pub(crate) fn request_connection(payload_len: u16) -> Self {
+		pub(crate) fn request_connection(payload_byte_count: u16) -> Self {
 			// Since the payload length is passed from library code, this should be safe.
-			debug_assert_eq!(payload_len & SIZE_BITS as u16, payload_len);
-			Self(SYNCHRONIZED_BIT | CONNECTION_REQUEST_BIT | payload_len as u32)
+			debug_assert_eq!(payload_byte_count & SIZE_BITS as u16, payload_byte_count);
+			Self(CONNECTION_REQUEST_BIT | payload_byte_count as u32)
 		}
 
 		/// Create a bitpattern associated with an volatile (unsynchronized) packet with given parcel length.
 		#[inline]
-		pub(crate) fn volatile(parcel_len: u16) -> Self {
+		pub(crate) fn volatile(parcel_byte_count: u16) -> Self {
 			// Since the parcel length is passed from library code, this should be safe.
-			debug_assert_eq!(parcel_len & SIZE_BITS as u16, parcel_len);
-			Self((parcel_len as u32) << 11)
+			debug_assert_eq!(parcel_byte_count & SIZE_BITS as u16, parcel_byte_count);
+			Self((parcel_byte_count as u32) << 11)
 		}
 
 		/// Create a bitpattern associated with a synchronized packet with given parcel and stream lengths.
 		#[inline]
-		pub(crate) fn synchronized(parcel_len: u16, stream_len: u16) -> Self {
-			debug_assert_eq!(parcel_len & SIZE_BITS as u16, parcel_len);
-			debug_assert_eq!(stream_len & SIZE_BITS as u16, stream_len);
-			Self(SYNCHRONIZED_BIT | ((parcel_len as u32) << 11) | stream_len as u32)
+		pub(crate) fn synchronized(parcel_byte_count: u16, stream_byte_count: u16) -> Self {
+			debug_assert_eq!(parcel_byte_count & SIZE_BITS as u16, parcel_byte_count);
+			debug_assert_eq!(stream_byte_count & SIZE_BITS as u16, stream_byte_count);
+			Self(SYNCHRONIZED_BIT | ((parcel_byte_count as u32) << 11) | stream_byte_count as u32)
+		}
+
+		/// Create a bitpattern associated with a packet that is informing of the connection being rejected.
+		#[inline]
+		pub(crate) fn reject(payload_byte_count: u16) -> Self {
+			debug_assert_eq!(payload_byte_count & SIZE_BITS as u16, payload_byte_count);
+			Self(CONNECTION_CLOSED_BIT | payload_byte_count as u32)
 		}
 	}
 
@@ -163,8 +170,8 @@ mod signal {
 
 			assert_eq!(bits.0, 0x0020_0000);
 
-			bits.set_stream_size(11);
-			bits.set_parcel_size(256);
+			bits.set_stream_byte_count(11);
+			bits.set_parcel_byte_count(256);
 
 			assert_eq!(bits.0, 0x0008000B);
 		}
@@ -252,16 +259,33 @@ impl PartialEq for PacketHeader {
 }
 
 impl PacketHeader {
-	/// Create a packet header associated with a connection request.
 	#[inline]
-	pub(crate) fn request_connection(payload_size: u16) -> Self {
+	fn zero() -> Self {
 		Self {
 			connection_id: 0,
-			signal: SignalBits::request_connection(payload_size),
+			signal: Default::default(),
 			packet_id: 0.into(),
 			ack_packet_id: 0.into(),
 			ack_packet_mask: 0,
 			prelude: [0; 4],
+		}
+	}
+
+	/// Create a packet header associated with a connection request.
+	#[inline]
+	pub(crate) fn request_connection(payload_byte_count: u16) -> Self {
+		Self {
+			signal: SignalBits::request_connection(payload_byte_count),
+			.. Self::zero()
+		}
+	}
+
+	/// Create a packet header for a connection-rejecting packet.
+	#[inline]
+	pub(crate) fn reject(payload_byte_count: u16) -> Self {
+		Self {
+			signal: SignalBits::reject(payload_byte_count),
+			.. Self::zero()
 		}
 	}
 
@@ -294,7 +318,7 @@ pub(crate) fn get_data_segment(packet: &[u8]) -> &[u8] {
 pub(crate) fn get_parcel_segment(packet: &[u8]) -> &[u8] {
 	let &header = get_header(packet);
 	let start = size_of::<PacketHeader>();
-	let end = start + header.signal.get_parcel_size() as usize;
+	let end = start + header.signal.get_parcel_byte_count() as usize;
 	debug_assert!(packet.len() >= end);
 	&packet[start .. end]
 }
@@ -303,8 +327,8 @@ pub(crate) fn get_parcel_segment(packet: &[u8]) -> &[u8] {
 #[inline]
 pub(crate) fn get_stream_segment(packet: &[u8]) -> &[u8] {
 	let &header = get_header(packet);
-	let start = size_of::<PacketHeader>() + header.signal.get_parcel_size() as usize;
-	let end = start + header.signal.get_stream_size() as usize;
+	let start = size_of::<PacketHeader>() + header.signal.get_parcel_byte_count() as usize;
+	let end = start + header.signal.get_stream_byte_count() as usize;
 	debug_assert!(packet.len() >= end);
 	&packet[start .. end]
 }

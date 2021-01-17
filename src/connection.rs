@@ -221,7 +221,7 @@ impl<T: Transmit, P: Parcel> From<IoError> for PendingConnectionError<T, P> {
 }
 
 impl<T: Transmit, P: Parcel> Connection<T, P> {
-	const PAYLOAD_BYTE_COUNT: usize = T::PACKET_BYTE_COUNT - std::mem::size_of::<PacketHeader>();
+	const PAYLOAD_BYTE_COUNT: usize = T::PACKET_BYTE_COUNT - std::mem::size_of::<PacketHeader>() - T::RESERVED_BYTE_COUNT;
 
 	/// Attempt to establish a new connection to provided remote address from provided local one.
 	#[inline]
@@ -391,15 +391,16 @@ impl<T: Transmit, P: Parcel> PendingConnection<T, P> {
 		if self.packet_buffer.is_empty() {
 			Err(PendingConnectionError::NoAnswer(self))
 		} else {
-			let packet = &self.packet_buffer[..T::PACKET_BYTE_COUNT];
-			if predicate(packet::get_data_segment(packet)) {
-				let connection_id = packet::get_header(packet).connection_id;
-				// Drop the first packet as it has been processed.
-				self.packet_buffer.drain(..T::PACKET_BYTE_COUNT);
+			let packet = &self.packet_buffer[T::RESERVED_BYTE_COUNT .. T::PACKET_BYTE_COUNT];
+			let packet_header = packet::get_header(packet);
+			if packet_header.connection_id == 0
+			&& packet_header.signal.is_signal_set(packet::Signal::ConnectionClosed) {
+				Err(PendingConnectionError::PredicateFail)
+			} else {
 				Ok(Connection {
 					endpoint: self.endpoint,
 					remote: self.remote,
-					connection_id,
+					connection_id: packet_header.connection_id,
 					packet_buffer: self.packet_buffer,
 					status: ConnectionStatus::Open,
 					last_sent_packet_time: self.last_sent_packet_time,
@@ -411,8 +412,6 @@ impl<T: Transmit, P: Parcel> PendingConnection<T, P> {
 
 					_message_type: self._message_type,
 				})
-			} else {
-				Err(PendingConnectionError::PredicateFail)
 			}
 		}
 	}
@@ -437,7 +436,7 @@ impl<T: Transmit, P: Parcel> PendingConnection<T, P> {
 			// Send another request
 			let original_len = self.packet_buffer.len();
 			self.packet_buffer.extend(repeat(0).take(T::PACKET_BYTE_COUNT));
-			let work_slice = &mut self.packet_buffer[original_len..];
+			let work_slice = &mut self.packet_buffer[original_len ..];
 			packet::write_header(
 				work_slice,
 				PacketHeader::request_connection(self.payload.len() as u16),

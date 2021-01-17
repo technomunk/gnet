@@ -77,10 +77,10 @@ impl<E: Transmit + Listen + Clone, P: Parcel> ConnectionListener<E, P> {
 				if Self::is_valid_connection_request_packet(&packet) {
 					match predicate(address, packet::get_stream_segment(&packet[E::RESERVED_BYTE_COUNT ..])) {
 						AcceptDecision::Allow => {
-							// TODO: consider sending an accept packet
+							todo!("Figure out connection_id");
 							Ok(Connection::opened(
 								self.endpoint.clone(),
-								Default::default(), // TODO: figure out connection_id
+								Default::default(),
 								address,
 							))
 						},
