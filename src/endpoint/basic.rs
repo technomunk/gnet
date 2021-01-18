@@ -212,3 +212,57 @@ impl Open for ServerEndpoint {
 		Ok(Mutex::new(InternalServerEndpoint::open(addr)?))
 	}
 }
+
+#[cfg(test)]
+mod test {
+	use super::*;
+	
+	use super::super::test::*;
+
+	#[test]
+	fn basic_client_sends_and_receives() {
+		let a_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1111));
+		let b_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1112));
+
+		let a = ClientEndpoint::open(a_addr).unwrap();
+		let b = ClientEndpoint::open(b_addr).unwrap();
+
+		generic_send_and_receive_test((a, a_addr), (b, b_addr))
+	}
+
+	#[test]
+	fn basic_server_sends_and_receives() {
+		let a_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1113));
+		let b_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1114));
+
+		let a = ServerEndpoint::open(a_addr).unwrap();
+		a.allow_connection_id(1);
+		let b = ServerEndpoint::open(b_addr).unwrap();
+		b.allow_connection_id(1);
+
+		generic_send_and_receive_test((a, a_addr), (b, b_addr))
+	}
+
+	#[test]
+	fn basic_server_client_send_and_receive() {
+		let a_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1115));
+		let b_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1116));
+
+		let a = ServerEndpoint::open(a_addr).unwrap();
+		a.allow_connection_id(1);
+		let b = ClientEndpoint::open(b_addr).unwrap();
+
+		generic_send_and_receive_test((a, a_addr), (b, b_addr))
+	}
+
+	#[test]
+	fn basic_server_accepts_client() {
+		let server_addr = SocketAddr::from(([127, 0, 0, 1], 1131));
+		let client_addr = SocketAddr::from(([127, 0, 0, 1], 1132));
+
+		let server = ServerEndpoint::open(server_addr).unwrap();
+		let client = ClientEndpoint::open(client_addr).unwrap();
+
+		generic_accept_test((server, server_addr), (client, client_addr))
+	}
+}

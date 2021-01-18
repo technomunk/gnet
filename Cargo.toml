@@ -17,3 +17,8 @@ documentation = "https://docs.rs/gnet"
 
 [dev-dependencies]
 hashers = "1.0.1"
+
+[features]
+basic-endpoints = []
+
+default = ["basic-endpoints"]

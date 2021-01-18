@@ -4,6 +4,7 @@
 //! be a simple udp socket ([`ClientEndpoint`](ClientEndpoint)) or have
 //! additional demultiplexing logic ([`ServerEndpoint`](ServerEndpoint)).
 
+#[cfg(feature = "basic-endpoints")]
 pub mod basic;
 
 use std::io::Error as IoError;
@@ -204,8 +205,6 @@ pub mod test {
 	use super::*;
 	use crate::packet;
 
-	use std::sync::Mutex;
-
 	#[inline]
 	fn get_packet_id<T: Transmit>(packet: &[u8]) -> packet::PacketIndex {
 		packet::get_header(&packet[T::RESERVED_BYTE_COUNT ..]).packet_id
@@ -333,52 +332,5 @@ pub mod test {
 			packet::get_parcel_segment(&packet_buffer[S::PACKET_BYTE_COUNT * 2 ..]),
 			PAYLOAD_DATA,
 		);
-	}
-
-	#[test]
-	fn basic_client_sends_and_receives() {
-		let a_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1111));
-		let b_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1112));
-
-		let a = basic::ClientEndpoint::open(a_addr).unwrap();
-		let b = basic::ClientEndpoint::open(b_addr).unwrap();
-
-		generic_send_and_receive_test((a, a_addr), (b, b_addr))
-	}
-
-	#[test]
-	fn basic_server_sends_and_receives() {
-		let a_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1113));
-		let b_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1114));
-
-		let a = basic::ServerEndpoint::open(a_addr).unwrap();
-		a.allow_connection_id(1);
-		let b = basic::ServerEndpoint::open(b_addr).unwrap();
-		b.allow_connection_id(1);
-
-		generic_send_and_receive_test((a, a_addr), (b, b_addr))
-	}
-
-	#[test]
-	fn basic_server_client_send_and_receive() {
-		let a_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1115));
-		let b_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1116));
-
-		let a = basic::ServerEndpoint::open(a_addr).unwrap();
-		a.allow_connection_id(1);
-		let b = basic::ClientEndpoint::open(b_addr).unwrap();
-
-		generic_send_and_receive_test((a, a_addr), (b, b_addr))
-	}
-
-	#[test]
-	fn basic_server_accepts_client() {
-		let server_addr = SocketAddr::from(([127, 0, 0, 1], 1131));
-		let client_addr = SocketAddr::from(([127, 0, 0, 1], 1132));
-
-		let server = basic::ServerEndpoint::open(server_addr).unwrap();
-		let client = basic::ClientEndpoint::open(client_addr).unwrap();
-
-		generic_accept_test((server, server_addr), (client, client_addr))
 	}
 }
