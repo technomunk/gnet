@@ -189,15 +189,13 @@ pub mod test {
 	) {
 		assert_eq!(S::PACKET_BYTE_COUNT, C::PACKET_BYTE_COUNT);
 		assert_eq!(S::RESERVED_BYTE_COUNT, C::RESERVED_BYTE_COUNT);
-		const REQUEST_DATA: &[u8] = b"GNET CONNECTION REQUEST";
 
 		let listener = ConnectionListener::<S, ()>::new(listener);
 
-		let packet_header = packet::PacketHeader::request_connection(REQUEST_DATA.len() as u16);
+		let packet_header = packet::PacketHeader::request_connection(0);
 		let mut packet_buffer = vec![0; C::PACKET_BYTE_COUNT];
 
 		packet::write_header(&mut packet_buffer[C::RESERVED_BYTE_COUNT ..], packet_header);
-		packet::write_data(&mut packet_buffer[C::RESERVED_BYTE_COUNT ..], b"GNET", 0);
 
 		assert_eq!(client.send_to(&mut packet_buffer, listener_addr).unwrap(), S::PACKET_BYTE_COUNT);
 
