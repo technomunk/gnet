@@ -11,7 +11,6 @@ pub mod listener;
 pub mod packet;
 
 pub use connection::{Connection, ConnectionError, PendingConnection, PendingConnectionError};
-pub use endpoint::{ClientEndpoint, ServerEndpoint};
 pub use listener::{AcceptError, ConnectionListener};
 
 use crate::byte::ByteSerialize;

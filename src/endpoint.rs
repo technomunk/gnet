@@ -4,9 +4,7 @@
 //! be a simple udp socket ([`ClientEndpoint`](ClientEndpoint)) or have
 //! additional demultiplexing logic ([`ServerEndpoint`](ServerEndpoint)).
 
-mod client;
-mod hash;
-mod server;
+pub mod basic;
 
 use std::io::Error as IoError;
 use std::net::SocketAddr;
@@ -14,11 +12,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use super::connection::ConnectionId;
-
-pub use client::ClientEndpoint;
-#[cfg(test)]
-pub(crate) use hash::TestHasherBuilder;
-pub use server::ServerEndpoint;
 
 /// An error associated with an endpoint.
 #[derive(Debug)]
@@ -115,6 +108,12 @@ pub trait Listen {
 	fn pop_connectionless_packet(&self) -> Result<(SocketAddr, Box<[u8]>), TransmitError>;
 }
 
+/// A trait for endpoints that may be initialized with address only.
+pub trait Open: Sized {
+	/// Attempt to bind a new endpoint at a provided local address.
+	fn open(addr: SocketAddr) -> Result<Self, IoError>;
+}
+
 impl std::fmt::Display for TransmitError {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
@@ -201,44 +200,105 @@ impl<L: Listen> Listen for Arc<L> {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
 	use super::*;
 	use crate::packet;
 
 	use std::sync::Mutex;
 
-	#[test]
-	fn server_is_compatible_with_client() {
-		let server_addr = SocketAddr::from(([127, 0, 0, 1], 1131));
-		let client_addr = SocketAddr::from(([127, 0, 0, 1], 1132));
+	#[inline]
+	fn get_packet_id<T: Transmit>(packet: &[u8]) -> packet::PacketIndex {
+		packet::get_header(&packet[T::RESERVED_BYTE_COUNT ..]).packet_id
+	}
 
-		let server = Mutex::new(ServerEndpoint::open(server_addr, TestHasherBuilder {}).unwrap());
-		let client = ClientEndpoint::open(client_addr, TestHasherBuilder {}).unwrap();
+	/// Test that 2 endpoints are able to send GNet packets to each other.
+	pub fn generic_send_and_receive_test<A: Transmit, B: Transmit>(
+		(a, a_addr): (A, SocketAddr),
+		(b, b_addr): (B, SocketAddr),
+	) {
+		assert_eq!(A::PACKET_BYTE_COUNT, B::PACKET_BYTE_COUNT);
+		assert_eq!(A::RESERVED_BYTE_COUNT, B::RESERVED_BYTE_COUNT);
+		const PAYLOAD_DATA: &[u8] = b"TEST DATA";
 
-		const PACKET_SIZE: usize = 1200;
-		const PACKET_OFFSET: usize = 8;
+		let mut packet_header = packet::PacketHeader {
+			connection_id: 1,
+			packet_id: 1.into(),
+			ack_packet_id: Default::default(),
+			ack_packet_mask: 0,
+			signal: packet::SignalBits::volatile(PAYLOAD_DATA.len() as u16),
+			prelude: [ 1, 2, 3, 4, ],
+		};
 
-		// Check test correctness
-		assert_eq!(PACKET_SIZE, Mutex::<ServerEndpoint<TestHasherBuilder>>::PACKET_BYTE_COUNT);
-		assert_eq!(PACKET_SIZE, ClientEndpoint::<TestHasherBuilder>::PACKET_BYTE_COUNT);
-		assert_eq!(PACKET_OFFSET, Mutex::<ServerEndpoint<TestHasherBuilder>>::RESERVED_BYTE_COUNT);
-		assert_eq!(PACKET_OFFSET, ClientEndpoint::<TestHasherBuilder>::RESERVED_BYTE_COUNT);
+		let mut packet_buffer = vec![0; A::PACKET_BYTE_COUNT];
+
+		// Send just 1 packet A to B
+
+		packet::write_header(&mut packet_buffer[A::RESERVED_BYTE_COUNT ..], packet_header);
+		packet::write_data(&mut packet_buffer[A::RESERVED_BYTE_COUNT ..], PAYLOAD_DATA, 0);
+
+		assert_eq!(A::PACKET_BYTE_COUNT, a.send_to(&mut packet_buffer, b_addr).unwrap());
+
+		packet_buffer.clear();
+		let recv_result = b.recv_all(&mut packet_buffer, 1);
+
+		let packet = &packet_buffer[A::RESERVED_BYTE_COUNT ..];
+		assert_eq!(recv_result.unwrap(), A::PACKET_BYTE_COUNT);
+		assert_eq!(packet_buffer.len(), A::PACKET_BYTE_COUNT);
+		assert_eq!(*packet::get_header(packet), packet_header);
+		assert_eq!(packet::get_parcel_segment(packet), PAYLOAD_DATA);
+
+		// Send 2 packets B to A
+
+		packet_header.packet_id = packet_header.packet_id.next();
+		packet::write_header(&mut packet_buffer[B::RESERVED_BYTE_COUNT ..], packet_header);
+
+		assert_eq!(b.send_to(&mut packet_buffer, a_addr).unwrap(), A::PACKET_BYTE_COUNT);
+
+		packet_header.packet_id = packet_header.packet_id.next();
+		packet::write_header(&mut packet_buffer[B::RESERVED_BYTE_COUNT ..], packet_header);
+
+		assert_eq!(b.send_to(&mut packet_buffer, a_addr).unwrap(), A::PACKET_BYTE_COUNT);
+
+		assert_eq!(a.recv_all(&mut packet_buffer, 1).unwrap(), A::PACKET_BYTE_COUNT * 2);
+		assert_eq!(packet_buffer.len(), A::PACKET_BYTE_COUNT * 3);
+
+		let packet = &packet_buffer[A::PACKET_BYTE_COUNT .. A::PACKET_BYTE_COUNT * 2];
+		assert_eq!(get_packet_id::<A>(packet), 2.into());
+		assert_eq!(packet::get_parcel_segment(packet), PAYLOAD_DATA);
+
+		let packet = &packet_buffer[A::PACKET_BYTE_COUNT * 2 ..];
+		assert_eq!(get_packet_id::<A>(packet), 3.into());
+		assert_eq!(packet::get_parcel_segment(packet), PAYLOAD_DATA);
+	}
+
+	/// Test that an endpoint is able to accept another endpoint's GNet requests.
+	pub fn generic_accept_test<S: Transmit + Listen, C: Transmit>(
+		(server, server_addr): (S, SocketAddr),
+		(client, client_addr): (C, SocketAddr),
+	) {
+		assert_eq!(S::PACKET_BYTE_COUNT, C::PACKET_BYTE_COUNT);
+		assert_eq!(S::RESERVED_BYTE_COUNT, C::RESERVED_BYTE_COUNT);
+		const REQUEST_DATA: &[u8] = b"GNET REQUEST";
+		const ACCEPT_DATA: &[u8] = b"GNET ACCEPT";
+		const PAYLOAD_DATA: &[u8] = b"GNET PAYLOAD DATA";
 
 		let mut packet_header = packet::PacketHeader::request_connection(4);
-		let mut packet_buffer = vec![0; PACKET_SIZE];
+		let mut packet_buffer = vec![0; S::PACKET_BYTE_COUNT];
+		
+		packet_header.signal.set_parcel_byte_count(REQUEST_DATA.len() as u16);
+		packet::write_header(&mut packet_buffer[S::RESERVED_BYTE_COUNT ..], packet_header);
+		packet::write_data(&mut packet_buffer[S::RESERVED_BYTE_COUNT ..], REQUEST_DATA, 0);
 
-		packet::write_header(&mut packet_buffer[PACKET_OFFSET..], packet_header);
-		packet::write_data(&mut packet_buffer[PACKET_OFFSET..], b"GNET", 0);
-
-		let send_result = client.send_to(&mut packet_buffer, server_addr);
-
-		assert_eq!(send_result.unwrap(), PACKET_SIZE);
+		assert_eq!(client.send_to(&mut packet_buffer, server_addr).unwrap(), S::PACKET_BYTE_COUNT);
 
 		let pop_result = server.pop_connectionless_packet();
 
 		if let Ok((addr, packet)) = pop_result {
 			assert_eq!(addr, client_addr);
-			assert_eq!(&packet[..], &packet_buffer[..]);
+			assert_eq!(
+				packet::get_parcel_segment(&packet[S::RESERVED_BYTE_COUNT ..]),
+				REQUEST_DATA,
+			)
 		} else {
 			panic!("No packet was popped!");
 		}
@@ -247,34 +307,78 @@ mod test {
 		packet_header.packet_id = 1.into();
 		server.allow_connection_id(1);
 
-		packet::write_header(&mut packet_buffer[PACKET_OFFSET..], packet_header);
-		packet::write_data(&mut packet_buffer[PACKET_OFFSET..], b"ACCEPT", 0);
+		packet_header.signal.set_parcel_byte_count(ACCEPT_DATA.len() as u16);
+		packet::write_header(&mut packet_buffer[S::RESERVED_BYTE_COUNT ..], packet_header);
+		packet::write_data(&mut packet_buffer[S::RESERVED_BYTE_COUNT ..], ACCEPT_DATA, 0);
 
-		let send_result = server.send_to(&mut packet_buffer, client_addr);
+		assert_eq!(server.send_to(&mut packet_buffer, client_addr).unwrap(), S::PACKET_BYTE_COUNT);
 
-		assert_eq!(send_result.unwrap(), PACKET_SIZE);
-
-		let recv_result = client.recv_all(&mut packet_buffer, 0);
-
-		assert_eq!(recv_result.unwrap(), PACKET_SIZE);
-		assert_eq!(&packet_buffer[..PACKET_SIZE], &packet_buffer[PACKET_SIZE..]);
-
-		packet_header.packet_id = packet_header.packet_id.next();
-
-		packet::write_header(&mut packet_buffer[PACKET_OFFSET..], packet_header);
-		packet::write_data(
-			&mut packet_buffer[PACKET_OFFSET..],
-			b"Testable data, shorter than 1200 bytes",
-			0,
+		assert_eq!(client.recv_all(&mut packet_buffer, 0).unwrap(), S::PACKET_BYTE_COUNT);
+		assert_eq!(
+			packet::get_parcel_segment(&packet_buffer[S::PACKET_BYTE_COUNT + S::RESERVED_BYTE_COUNT ..]),
+			ACCEPT_DATA,
 		);
 
-		let send_result = client.send_to(&mut packet_buffer[..PACKET_SIZE], server_addr);
 
-		assert_eq!(send_result.unwrap(), PACKET_SIZE);
+		packet_header.packet_id = packet_header.packet_id.next();
+		packet_header.signal.set_parcel_byte_count(PAYLOAD_DATA.len() as u16);
+		packet::write_header(&mut packet_buffer[S::RESERVED_BYTE_COUNT ..], packet_header);
+		packet::write_data(&mut packet_buffer[S::RESERVED_BYTE_COUNT ..], PAYLOAD_DATA, 0);
 
-		let recv_result = server.recv_all(&mut packet_buffer, 1);
+		let send_result = client.send_to(&mut packet_buffer[.. S::PACKET_BYTE_COUNT], server_addr);
+		assert_eq!(send_result.unwrap(), S::PACKET_BYTE_COUNT);
 
-		assert_eq!(recv_result.unwrap(), PACKET_SIZE);
-		assert_eq!(&packet_buffer[..PACKET_SIZE], &packet_buffer[PACKET_SIZE * 2..]);
+		assert_eq!(server.recv_all(&mut packet_buffer, 1).unwrap(), S::PACKET_BYTE_COUNT);
+		assert_eq!(
+			packet::get_parcel_segment(&packet_buffer[S::PACKET_BYTE_COUNT * 2 ..]),
+			PAYLOAD_DATA,
+		);
+	}
+
+	#[test]
+	fn basic_client_sends_and_receives() {
+		let a_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1111));
+		let b_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1112));
+
+		let a = basic::ClientEndpoint::open(a_addr).unwrap();
+		let b = basic::ClientEndpoint::open(b_addr).unwrap();
+
+		generic_send_and_receive_test((a, a_addr), (b, b_addr))
+	}
+
+	#[test]
+	fn basic_server_sends_and_receives() {
+		let a_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1113));
+		let b_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1114));
+
+		let a = basic::ServerEndpoint::open(a_addr).unwrap();
+		a.allow_connection_id(1);
+		let b = basic::ServerEndpoint::open(b_addr).unwrap();
+		b.allow_connection_id(1);
+
+		generic_send_and_receive_test((a, a_addr), (b, b_addr))
+	}
+
+	#[test]
+	fn basic_server_client_send_and_receive() {
+		let a_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1115));
+		let b_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1116));
+
+		let a = basic::ServerEndpoint::open(a_addr).unwrap();
+		a.allow_connection_id(1);
+		let b = basic::ClientEndpoint::open(b_addr).unwrap();
+
+		generic_send_and_receive_test((a, a_addr), (b, b_addr))
+	}
+
+	#[test]
+	fn basic_server_accepts_client() {
+		let server_addr = SocketAddr::from(([127, 0, 0, 1], 1131));
+		let client_addr = SocketAddr::from(([127, 0, 0, 1], 1132));
+
+		let server = basic::ServerEndpoint::open(server_addr).unwrap();
+		let client = basic::ClientEndpoint::open(client_addr).unwrap();
+
+		generic_accept_test((server, server_addr), (client, client_addr))
 	}
 }

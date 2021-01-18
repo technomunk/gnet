@@ -32,7 +32,7 @@ pub struct PacketIndex(Wrapping<u8>);
 mod signal {
 	/// Possible signals sent in the packet protocol.
 	#[derive(Debug, Clone, Copy)]
-	pub(crate) enum Signal {
+	pub enum Signal {
 		/// The packet is a request for a new connection.
 		// (parcel bytes == 0, stream bytes => payload size)
 		ConnectionRequest,
@@ -49,20 +49,23 @@ mod signal {
 	/// |--------|------------|--------------|-------------------|--------------------|-----------------|--------------|
 	/// | value  | `[zeroes]` | synchronized | connection_closed | connection_request | parcel(s) bytes | stream bytes |
 	#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-	pub(crate) struct SignalBits(u32);
+	pub struct SignalBits(u32);
 
-	pub(crate) const CONNECTION_REQUEST_BIT: u32 = 1 << 22;
-	pub(crate) const CONNECTION_CLOSED_BIT: u32 = 1 << 23;
-	pub(crate) const SYNCHRONIZED_BIT: u32 = 1 << 24;
+	const CONNECTION_REQUEST_BIT: u32 = 1 << 22;
+	const CONNECTION_CLOSED_BIT: u32 = 1 << 23;
+	const SYNCHRONIZED_BIT: u32 = 1 << 24;
 
-	const SIZE_BITS: u32 = 0x7FF;
+	const ZERO_BITS: u32 = 0xFFFF << 25;
+
+	const BYTE_COUNT_BITS: u32 = 0x7FF;
+	const FULL_BYTE_COUNT_BITS: u32 = BYTE_COUNT_BITS << 11 | BYTE_COUNT_BITS;
 
 	impl SignalBits {
 		/// Sets the signal flags associated with given signal.
 		///
 		/// To read the flag use [`is_signal_set`](SignalBits::is_signal_set) method.
 		#[inline]
-		pub(crate) fn set_signal(&mut self, signal: Signal) {
+		pub fn set_signal(&mut self, signal: Signal) {
 			match signal {
 				Signal::ConnectionRequest => self.0 |= CONNECTION_REQUEST_BIT,
 				Signal::ConnectionClosed => self.0 |= CONNECTION_CLOSED_BIT,
@@ -74,7 +77,7 @@ mod signal {
 		///
 		/// To read the flag use [`is_signal_set`](SignalBits::is_signal_set) method.
 		#[inline]
-		pub(crate) fn clear_signal(&mut self, signal: Signal) {
+		pub fn clear_signal(&mut self, signal: Signal) {
 			match signal {
 				Signal::ConnectionRequest => self.0 &= !CONNECTION_REQUEST_BIT,
 				Signal::ConnectionClosed => self.0 &= !CONNECTION_CLOSED_BIT,
@@ -86,7 +89,7 @@ mod signal {
 		///
 		/// The flags are set with [`set_signal`](SignalBits::set_signal) and cleared with [`clear_signal`](SignalBits::clear_signal) methods.
 		#[inline]
-		pub(crate) fn is_signal_set(&self, signal: Signal) -> bool {
+		pub fn is_signal_set(&self, signal: Signal) -> bool {
 			match signal {
 				Signal::ConnectionRequest => (self.0 & CONNECTION_REQUEST_BIT) == CONNECTION_REQUEST_BIT,
 				Signal::ConnectionClosed => (self.0 & CONNECTION_CLOSED_BIT) == CONNECTION_CLOSED_BIT,
@@ -96,67 +99,93 @@ mod signal {
 
 		/// Set the byte-count of the parcel portion of the packet to given value.
 		#[inline]
-		pub(crate) fn set_parcel_byte_count(&mut self, count: u16) {
-			debug_assert_eq!(count & SIZE_BITS as u16, count);
-			self.0 = (self.0 & !(SIZE_BITS << 11)) | ((count as u32) << 11);
+		pub fn set_parcel_byte_count(&mut self, count: u16) {
+			debug_assert_eq!(count & BYTE_COUNT_BITS as u16, count);
+			self.0 = (self.0 & !(BYTE_COUNT_BITS << 11)) | ((count as u32) << 11);
 		}
 
 		/// Get the byte-count of the parcel potion of the packet
 		#[inline]
-		pub(crate) fn get_parcel_byte_count(&self) -> u16 {
-			((self.0 & (SIZE_BITS << 11)) >> 11) as u16
+		pub fn get_parcel_byte_count(&self) -> u16 {
+			((self.0 & (BYTE_COUNT_BITS << 11)) >> 11) as u16
 		}
 
 		/// Set the byte-count of the stream portion of the packet to given value.
 		#[inline]
-		pub(crate) fn set_stream_byte_count(&mut self, count: u16) {
-			debug_assert_eq!(count & SIZE_BITS as u16, count);
-			self.0 = (self.0 & !SIZE_BITS) | count as u32;
+		pub fn set_stream_byte_count(&mut self, count: u16) {
+			debug_assert_eq!(count & BYTE_COUNT_BITS as u16, count);
+			self.0 = (self.0 & !BYTE_COUNT_BITS) | count as u32;
 		}
 
 		/// Get the byte-count of the stream potion of the packet
 		#[inline]
-		pub(crate) fn get_stream_byte_count(&self) -> u16 {
-			(self.0 & SIZE_BITS) as u16
+		pub fn get_stream_byte_count(&self) -> u16 {
+			(self.0 & BYTE_COUNT_BITS) as u16
+		}
+
+		/// Check whether the byte_count is 0 for both the stream and parcel segments.
+		#[inline]
+		pub fn is_empty(&self) -> bool {
+			(self.0 & FULL_BYTE_COUNT_BITS) == 0
 		}
 
 		/// Create a *KeepAlive* protocol bitpattern.
 		///
 		/// KeepAlive packets contain no payload, they simply signal update the connection timing.
 		#[inline]
-		pub(crate) fn keep_alive() -> Self {
+		pub fn keep_alive() -> Self {
 			Self(0)
 		}
 
 		/// Create a bitpattern associated with a connection request.
 		#[inline]
-		pub(crate) fn request_connection(payload_byte_count: u16) -> Self {
+		pub fn request_connection(payload_byte_count: u16) -> Self {
 			// Since the payload length is passed from library code, this should be safe.
-			debug_assert_eq!(payload_byte_count & SIZE_BITS as u16, payload_byte_count);
+			debug_assert_eq!(payload_byte_count & BYTE_COUNT_BITS as u16, payload_byte_count);
 			Self(CONNECTION_REQUEST_BIT | payload_byte_count as u32)
 		}
 
 		/// Create a bitpattern associated with an volatile (unsynchronized) packet with given parcel length.
 		#[inline]
-		pub(crate) fn volatile(parcel_byte_count: u16) -> Self {
+		pub fn volatile(parcel_byte_count: u16) -> Self {
 			// Since the parcel length is passed from library code, this should be safe.
-			debug_assert_eq!(parcel_byte_count & SIZE_BITS as u16, parcel_byte_count);
+			debug_assert_eq!(parcel_byte_count & BYTE_COUNT_BITS as u16, parcel_byte_count);
 			Self((parcel_byte_count as u32) << 11)
 		}
 
 		/// Create a bitpattern associated with a synchronized packet with given parcel and stream lengths.
 		#[inline]
-		pub(crate) fn synchronized(parcel_byte_count: u16, stream_byte_count: u16) -> Self {
-			debug_assert_eq!(parcel_byte_count & SIZE_BITS as u16, parcel_byte_count);
-			debug_assert_eq!(stream_byte_count & SIZE_BITS as u16, stream_byte_count);
+		pub fn synchronized(parcel_byte_count: u16, stream_byte_count: u16) -> Self {
+			debug_assert_eq!(parcel_byte_count & BYTE_COUNT_BITS as u16, parcel_byte_count);
+			debug_assert_eq!(stream_byte_count & BYTE_COUNT_BITS as u16, stream_byte_count);
 			Self(SYNCHRONIZED_BIT | ((parcel_byte_count as u32) << 11) | stream_byte_count as u32)
 		}
 
 		/// Create a bitpattern associated with a packet that is informing of the connection being rejected.
 		#[inline]
-		pub(crate) fn reject(payload_byte_count: u16) -> Self {
-			debug_assert_eq!(payload_byte_count & SIZE_BITS as u16, payload_byte_count);
+		pub fn reject(payload_byte_count: u16) -> Self {
+			debug_assert_eq!(payload_byte_count & BYTE_COUNT_BITS as u16, payload_byte_count);
 			Self(CONNECTION_CLOSED_BIT | payload_byte_count as u32)
+		}
+
+		/// Check that a given bitpattern is a valid one in GNet protocol associated with a connectionless packet.
+		#[inline]
+		pub fn is_valid_connectionless(&self) -> bool {
+			const CRITICAL_BITS: u32 = ZERO_BITS | SYNCHRONIZED_BIT | CONNECTION_CLOSED_BIT | CONNECTION_REQUEST_BIT;
+			(self.0 & CRITICAL_BITS) == CONNECTION_REQUEST_BIT
+		}
+
+		/// Check that a given bitpattern is a valid one in GNet protocol.
+		#[inline]
+		pub fn is_valid(&self) -> bool {
+			const CRITICAL_BITS: u32 = ZERO_BITS | SYNCHRONIZED_BIT | CONNECTION_CLOSED_BIT | CONNECTION_REQUEST_BIT;
+			match self.0 & CRITICAL_BITS {
+				0 => true,
+				SYNCHRONIZED_BIT => true,
+				CONNECTION_CLOSED_BIT => true,
+				CONNECTION_REQUEST_BIT => true,
+				_ => false,
+			}
 		}
 	}
 
@@ -178,12 +207,12 @@ mod signal {
 	}
 }
 
-pub(crate) use signal::{Signal, SignalBits};
+pub use signal::{Signal, SignalBits};
 
 /// Header associated with each sent network packet.
 #[derive(Debug, Clone, Copy, Eq)]
 #[repr(C)]
-pub(crate) struct PacketHeader {
+pub struct PacketHeader {
 	/// Id of the owning connection.
 	pub connection_id: ConnectionId,
 	/// Sequential index of the packet.
@@ -273,7 +302,7 @@ impl PacketHeader {
 
 	/// Create a packet header associated with a connection request.
 	#[inline]
-	pub(crate) fn request_connection(payload_byte_count: u16) -> Self {
+	pub fn request_connection(payload_byte_count: u16) -> Self {
 		Self {
 			signal: SignalBits::request_connection(payload_byte_count),
 			.. Self::zero()
@@ -282,7 +311,7 @@ impl PacketHeader {
 
 	/// Create a packet header for a connection-rejecting packet.
 	#[inline]
-	pub(crate) fn reject(payload_byte_count: u16) -> Self {
+	pub fn reject(payload_byte_count: u16) -> Self {
 		Self {
 			signal: SignalBits::reject(payload_byte_count),
 			.. Self::zero()
@@ -290,7 +319,7 @@ impl PacketHeader {
 	}
 
 	/// Check whether the header acknowledges provided packet id.
-	pub(crate) fn acknowledges(&self, packet_id: PacketIndex) -> bool {
+	pub fn acknowledges(&self, packet_id: PacketIndex) -> bool {
 		if self.signal.is_signal_set(Signal::ConnectionRequest) {
 			false
 		} else {
@@ -304,18 +333,34 @@ impl PacketHeader {
 			}
 		}
 	}
+
+	/// Check that the PacketHeader is a valid GNet packet header.
+	#[inline]
+	pub fn is_valid(&self) -> bool {
+		if self.connection_id == 0 {
+			self.signal.is_valid_connectionless()
+		} else {
+			self.signal.is_valid()
+		}
+	}
+
+	/// Get the total number of data payload bytes that the packet header accounts for.
+	#[inline]
+	pub fn get_payload_byte_count(&self) -> u16 {
+		self.signal.get_parcel_byte_count() + self.signal.get_stream_byte_count()
+	}
 }
 
 /// Get the data segment of a packet.
 #[inline]
-pub(crate) fn get_data_segment(packet: &[u8]) -> &[u8] {
+pub fn get_data_segment(packet: &[u8]) -> &[u8] {
 	debug_assert!(packet.len() >= size_of::<PacketHeader>());
 	&packet[size_of::<PacketHeader>() ..]
 }
 
 /// Get the valid stream portion of the packet
 #[inline]
-pub(crate) fn get_parcel_segment(packet: &[u8]) -> &[u8] {
+pub fn get_parcel_segment(packet: &[u8]) -> &[u8] {
 	let &header = get_header(packet);
 	let start = size_of::<PacketHeader>();
 	let end = start + header.signal.get_parcel_byte_count() as usize;
@@ -325,7 +370,7 @@ pub(crate) fn get_parcel_segment(packet: &[u8]) -> &[u8] {
 
 /// Get the valid stream portion of the packet
 #[inline]
-pub(crate) fn get_stream_segment(packet: &[u8]) -> &[u8] {
+pub fn get_stream_segment(packet: &[u8]) -> &[u8] {
 	let &header = get_header(packet);
 	let start = size_of::<PacketHeader>() + header.signal.get_parcel_byte_count() as usize;
 	let end = start + header.signal.get_stream_byte_count() as usize;
@@ -335,14 +380,14 @@ pub(crate) fn get_stream_segment(packet: &[u8]) -> &[u8] {
 
 /// Get the mutable data segment of a packet.
 #[inline]
-pub(crate) fn get_mut_data_segment(packet: &mut [u8]) -> &mut [u8] {
+pub fn get_mut_data_segment(packet: &mut [u8]) -> &mut [u8] {
 	debug_assert!(packet.len() >= size_of::<PacketHeader>());
 	&mut packet[size_of::<PacketHeader>() ..]
 }
 
 /// Get the header segment of a packet.
 #[inline]
-pub(crate) fn get_header(packet: &[u8]) -> &PacketHeader {
+pub fn get_header(packet: &[u8]) -> &PacketHeader {
 	debug_assert!(packet.len() >= size_of::<PacketHeader>());
 	debug_assert_eq!(packet.as_ptr().align_offset(std::mem::align_of::<PacketHeader>()), 0);
 	unsafe { &*(packet.as_ptr() as *const PacketHeader) }
@@ -350,14 +395,14 @@ pub(crate) fn get_header(packet: &[u8]) -> &PacketHeader {
 
 /// Write the provided data into the provided packet data segment.
 #[inline]
-pub(crate) fn write_data(packet: &mut [u8], data: &[u8], offset: usize) {
+pub fn write_data(packet: &mut [u8], data: &[u8], offset: usize) {
 	debug_assert!(packet.len() >= size_of::<PacketHeader>());
 	let offset = offset + size_of::<PacketHeader>();
 	packet[offset..offset + data.len()].copy_from_slice(data)
 }
 
 /// Clear the remainder of the data segment of the packet starting at provided offset.
-pub(crate) fn clear_remaining_data(packet: &mut [u8], offset: usize) {
+pub fn clear_remaining_data(packet: &mut [u8], offset: usize) {
 	debug_assert!(packet.len() >= size_of::<PacketHeader>());
 	let offset = offset + size_of::<PacketHeader>();
 	for i in packet[offset..].iter_mut() {
@@ -367,7 +412,7 @@ pub(crate) fn clear_remaining_data(packet: &mut [u8], offset: usize) {
 
 /// Write the provided packet header into provided packet.
 #[inline]
-pub(crate) fn write_header(packet: &mut [u8], header: PacketHeader) {
+pub fn write_header(packet: &mut [u8], header: PacketHeader) {
 	debug_assert!(packet.len() >= size_of::<PacketHeader>());
 	debug_assert_eq!(packet.as_ptr().align_offset(std::mem::align_of::<PacketHeader>()), 0);
 	unsafe { *(packet.as_mut_ptr() as *mut PacketHeader) = header }
@@ -377,6 +422,13 @@ pub(crate) fn write_header(packet: &mut [u8], header: PacketHeader) {
 pub fn read_connection_id(packet: &[u8]) -> ConnectionId {
 	debug_assert!(packet.len() >= size_of::<PacketHeader>());
 	get_header(packet).connection_id
+}
+
+#[inline]
+pub fn is_valid(packet: &[u8]) -> bool {
+	debug_assert!(packet.len() >= size_of::<PacketHeader>());
+	let &header = get_header(packet);
+	header.is_valid() && header.get_payload_byte_count() <= (packet.len() - size_of::<PacketHeader>()) as u16
 }
 
 #[cfg(test)]

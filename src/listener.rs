@@ -127,7 +127,8 @@ mod test {
 	use super::*;
 
 	use crate::packet;
-	use crate::endpoint::{ServerEndpoint, ClientEndpoint, TestHasherBuilder};
+	use crate::endpoint::Open;
+	use crate::endpoint::basic::{ServerEndpoint, ClientEndpoint};
 
 	#[test]
 	fn listener_accepts() {
@@ -135,19 +136,19 @@ mod test {
 		let client_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1212));
 
 		let listener = {
-			let endpoint = ServerEndpoint::open(listener_addr, TestHasherBuilder {}).unwrap();
-			let endpoint = Arc::new(Mutex::new(endpoint));
+			let endpoint = ServerEndpoint::open(listener_addr).unwrap();
+			let endpoint = Arc::new(endpoint);
 			ConnectionListener::<_, ()>::new(endpoint)
 		};
-		let client = ClientEndpoint::open(client_addr, TestHasherBuilder {}).unwrap();
+		let client = ClientEndpoint::open(client_addr).unwrap();
 
 		const PACKET_SIZE: usize = 1200;
 		const PACKET_OFFSET: usize = 8;
 
-		assert_eq!(PACKET_SIZE, Arc::<Mutex<ServerEndpoint<TestHasherBuilder>>>::PACKET_BYTE_COUNT);
-		assert_eq!(PACKET_SIZE, ClientEndpoint::<TestHasherBuilder>::PACKET_BYTE_COUNT);
-		assert_eq!(PACKET_OFFSET, Arc::<Mutex<ServerEndpoint<TestHasherBuilder>>>::RESERVED_BYTE_COUNT);
-		assert_eq!(PACKET_OFFSET, ClientEndpoint::<TestHasherBuilder>::RESERVED_BYTE_COUNT);
+		assert_eq!(PACKET_SIZE, Arc::<ServerEndpoint>::PACKET_BYTE_COUNT);
+		assert_eq!(PACKET_SIZE, ClientEndpoint::PACKET_BYTE_COUNT);
+		assert_eq!(PACKET_OFFSET, Arc::<ServerEndpoint>::RESERVED_BYTE_COUNT);
+		assert_eq!(PACKET_OFFSET, ClientEndpoint::RESERVED_BYTE_COUNT);
 
 		let packet_header = packet::PacketHeader::request_connection(4);
 		let mut packet_buffer = vec![0; PACKET_SIZE];
@@ -178,19 +179,19 @@ mod test {
 		let client_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1212));
 
 		let listener = {
-			let endpoint = ServerEndpoint::open(listener_addr, TestHasherBuilder {}).unwrap();
-			let endpoint = Arc::new(Mutex::new(endpoint));
+			let endpoint = ServerEndpoint::open(listener_addr).unwrap();
+			let endpoint = Arc::new(endpoint);
 			ConnectionListener::<_, ()>::new(endpoint)
 		};
-		let client = ClientEndpoint::open(client_addr, TestHasherBuilder {}).unwrap();
+		let client = ClientEndpoint::open(client_addr).unwrap();
 
 		const PACKET_SIZE: usize = 1200;
 		const PACKET_OFFSET: usize = 8;
 
-		assert_eq!(PACKET_SIZE, Arc::<Mutex<ServerEndpoint<TestHasherBuilder>>>::PACKET_BYTE_COUNT);
-		assert_eq!(PACKET_SIZE, ClientEndpoint::<TestHasherBuilder>::PACKET_BYTE_COUNT);
-		assert_eq!(PACKET_OFFSET, Arc::<Mutex<ServerEndpoint<TestHasherBuilder>>>::RESERVED_BYTE_COUNT);
-		assert_eq!(PACKET_OFFSET, ClientEndpoint::<TestHasherBuilder>::RESERVED_BYTE_COUNT);
+		assert_eq!(PACKET_SIZE, Arc::<ServerEndpoint>::PACKET_BYTE_COUNT);
+		assert_eq!(PACKET_SIZE, ClientEndpoint::PACKET_BYTE_COUNT);
+		assert_eq!(PACKET_OFFSET, Arc::<ServerEndpoint>::RESERVED_BYTE_COUNT);
+		assert_eq!(PACKET_OFFSET, ClientEndpoint::RESERVED_BYTE_COUNT);
 
 		let packet_header = packet::PacketHeader::request_connection(4);
 		let mut packet_buffer = vec![0; PACKET_SIZE];
