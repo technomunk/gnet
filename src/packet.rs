@@ -179,13 +179,7 @@ mod signal {
 		#[inline]
 		pub fn is_valid(&self) -> bool {
 			const CRITICAL_BITS: u32 = ZERO_BITS | SYNCHRONIZED_BIT | CONNECTION_CLOSED_BIT | CONNECTION_REQUEST_BIT;
-			match self.0 & CRITICAL_BITS {
-				0 => true,
-				SYNCHRONIZED_BIT => true,
-				CONNECTION_CLOSED_BIT => true,
-				CONNECTION_REQUEST_BIT => true,
-				_ => false,
-			}
+			matches!(self.0 & CRITICAL_BITS, 0 | SYNCHRONIZED_BIT | CONNECTION_CLOSED_BIT | CONNECTION_REQUEST_BIT)
 		}
 	}
 
