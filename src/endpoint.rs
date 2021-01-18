@@ -12,7 +12,7 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use super::connection::ConnectionId;
+use super::id::ConnectionId;
 
 /// An error associated with an endpoint.
 #[derive(Debug)]

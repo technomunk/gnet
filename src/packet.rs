@@ -17,7 +17,7 @@ use std::num::Wrapping;
 
 use signal::*;
 
-use super::connection::ConnectionId;
+use super::id::ConnectionId;
 
 /// Networked data is preluded with this fixed-size user-data.
 pub type DataPrelude = [u8; 4];
@@ -142,7 +142,7 @@ mod signal {
 		pub fn request_connection(payload_byte_count: u16) -> Self {
 			// Since the payload length is passed from library code, this should be safe.
 			debug_assert_eq!(payload_byte_count & BYTE_COUNT_BITS as u16, payload_byte_count);
-			Self(CONNECTION_REQUEST_BIT | payload_byte_count as u32)
+			Self(CONNECTION_REQUEST_BIT | (payload_byte_count << 11) as u32)
 		}
 
 		/// Create a bitpattern associated with an volatile (unsynchronized) packet with given parcel length.
@@ -171,7 +171,12 @@ mod signal {
 		/// Check that a given bitpattern is a valid one in GNet protocol associated with a connectionless packet.
 		#[inline]
 		pub fn is_valid_connectionless(&self) -> bool {
-			const CRITICAL_BITS: u32 = ZERO_BITS | SYNCHRONIZED_BIT | CONNECTION_CLOSED_BIT | CONNECTION_REQUEST_BIT;
+			const CRITICAL_BITS: u32 =
+				ZERO_BITS
+				| SYNCHRONIZED_BIT
+				| CONNECTION_CLOSED_BIT
+				| CONNECTION_REQUEST_BIT
+				| BYTE_COUNT_BITS;
 			(self.0 & CRITICAL_BITS) == CONNECTION_REQUEST_BIT
 		}
 
@@ -328,6 +333,12 @@ impl PacketHeader {
 		}
 	}
 
+	/// Check that the PacketHeader is a valid connectionless GNet packet header.
+	#[inline]
+	pub fn is_valid_connectionless(&self) -> bool {
+		self.connection_id == 0 && self.signal.is_valid_connectionless()
+	}
+
 	/// Check that the PacketHeader is a valid GNet packet header.
 	#[inline]
 	pub fn is_valid(&self) -> bool {
@@ -418,11 +429,22 @@ pub fn read_connection_id(packet: &[u8]) -> ConnectionId {
 	get_header(packet).connection_id
 }
 
+/// Check whether the provided packet is a valid GNet packet.
 #[inline]
 pub fn is_valid(packet: &[u8]) -> bool {
 	debug_assert!(packet.len() >= size_of::<PacketHeader>());
 	let &header = get_header(packet);
-	header.is_valid() && header.get_payload_byte_count() <= (packet.len() - size_of::<PacketHeader>()) as u16
+	header.is_valid()
+		&& header.get_payload_byte_count() <= (packet.len() - size_of::<PacketHeader>()) as u16
+}
+
+/// Check whether the provided packet is a valid connectionless GNet packet.
+#[inline]
+pub fn is_valid_connectionless(packet: &[u8]) -> bool {
+	debug_assert!(packet.len() >= size_of::<PacketHeader>());
+	let &header = get_header(packet);
+	header.is_valid_connectionless()
+		&& header.signal.get_parcel_byte_count() <= (packet.len() - size_of::<PacketHeader>()) as u16
 }
 
 #[cfg(test)]

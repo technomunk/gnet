@@ -1,13 +1,15 @@
 //! Definition of listeners that the server uses to accept new connections.
 
-use crate::connection::{Connection, ConnectionId, ConnectionStatus};
+use crate::connection::{Connection, ConnectionStatus};
 use crate::endpoint::{Listen, Transmit, TransmitError};
+use crate::id::{ConnectionId, Allocator as ConnectionIdAllocator};
 use crate::packet;
 use crate::Parcel;
 
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::time::Instant;
+use std::sync::Mutex;
 
 /// A listener passively listens for new connections.
 ///
@@ -15,10 +17,12 @@ use std::time::Instant;
 /// decide whether to accept a particular new connection.
 pub struct ConnectionListener<E: Transmit + Listen + Clone, P: Parcel> {
 	endpoint: E,
+	id_allocator: Mutex<ConnectionIdAllocator>,
 	_message_type: PhantomData<P>,
 }
 
 /// An error raised trying to accept an incoming connection.
+#[derive(Debug)]
 pub enum AcceptError {
 	/// Something happened attempting to read an incoming packet
 	Transmit(TransmitError),
@@ -26,6 +30,7 @@ pub enum AcceptError {
 	/// There may still be other connections to accept
 	/// Contains the address of the source of the invalid request
 	InvalidRequest(SocketAddr),
+	OutOfIds,
 	/// The pending connection failed the provided predicate
 	/// There may still be other connections to accept
 	PredicateFail,
@@ -52,6 +57,7 @@ impl<E: Transmit + Listen + Clone, P: Parcel> ConnectionListener<E, P> {
 	pub fn new(endpoint: E) -> Self {
 		Self {
 			endpoint,
+			id_allocator: Default::default(),
 			_message_type: PhantomData,
 		}
 	}
@@ -74,13 +80,12 @@ impl<E: Transmit + Listen + Clone, P: Parcel> ConnectionListener<E, P> {
 	) -> Result<Connection<E, P>, AcceptError> {
 		match self.endpoint.pop_connectionless_packet() {
 			Ok((address, packet)) => {
-				if Self::is_valid_connection_request_packet(&packet) {
-					match predicate(address, packet::get_stream_segment(&packet[E::RESERVED_BYTE_COUNT ..])) {
+				if packet::is_valid_connectionless(&packet[E::RESERVED_BYTE_COUNT ..]) {
+					match predicate(address, packet::get_parcel_segment(&packet[E::RESERVED_BYTE_COUNT ..])) {
 						AcceptDecision::Allow => {
-							todo!("Figure out connection_id");
 							Ok(Connection::opened(
 								self.endpoint.clone(),
-								Default::default(),
+								self.id_allocator.lock().unwrap().allocate()?,
 								address,
 							))
 						},
@@ -98,15 +103,13 @@ impl<E: Transmit + Listen + Clone, P: Parcel> ConnectionListener<E, P> {
 		}
 	}
 
-	/// Check that provided packet is a valid connection-request one
-	#[inline]
-	fn is_valid_connection_request_packet(packet: &[u8]) -> bool {
-		let header = packet::get_header(&packet[E::RESERVED_BYTE_COUNT ..]);
-
-		packet.len() == E::PACKET_BYTE_COUNT
-			&& header.connection_id == 0
-			&& header.signal.is_signal_set(packet::Signal::ConnectionRequest)
-			&& header.signal.is_signal_set(packet::Signal::Synchronized)
+	/// Inform the listener about a connection that was closed.
+	/// 
+	/// Note that the connection_id must have been assigned by the listener itself, in other
+	/// words the connection closed must have come from the result of
+	/// [`try_accept()`](ConnectionListener::try_accept).
+	pub fn connection_closed(&self, connection_id: ConnectionId) {
+		self.id_allocator.lock().unwrap().free(connection_id)
 	}
 }
 
@@ -120,48 +123,53 @@ impl From<TransmitError> for AcceptError {
 	}
 }
 
+impl From<super::id::OutOfIdsError> for AcceptError {
+	fn from(error: super::id::OutOfIdsError) -> Self {
+		Self::OutOfIds
+	}
+}
+
+impl std::fmt::Display for AcceptError {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+		match self {
+			Self::Transmit(error) => error.fmt(f),
+			Self::InvalidRequest(addr) => write!(f, "got incorrect connection request from {}", addr),
+			Self::OutOfIds => write!(f, "ran out of connection ids to assign"),
+			Self::PredicateFail => write!(f, "connection request was denied"),
+			Self::NoPendingConnections => write!(f, "no connections were requested"),
+		}
+	}
+}
+
+impl std::error::Error for AcceptError {}
+
 #[cfg(test)]
-mod test {
-	use std::sync::{Arc, Mutex};
-	
+pub mod test {
+	use crate::packet;
 	use super::*;
 
-	use crate::packet;
-	use crate::endpoint::Open;
-	use crate::endpoint::basic::{ServerEndpoint, ClientEndpoint};
+	/// Test that a [`ConnectionListener`](ConnectionListener) is able to accept new connections
+	/// using provided server and client endpoint implementations.
+	pub fn generic_listener_accept_test<S: Transmit + Listen + Clone, C: Transmit>(
+		(listener, listener_addr): (S, SocketAddr),
+		(client, client_addr): (C, SocketAddr),
+	) {
+		let listener = ConnectionListener::<S, ()>::new(listener);
 
-	#[test]
-	fn listener_accepts() {
-		let listener_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1211));
-		let client_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1212));
+		assert_eq!(S::PACKET_BYTE_COUNT, C::PACKET_BYTE_COUNT);
+		assert_eq!(S::RESERVED_BYTE_COUNT, C::RESERVED_BYTE_COUNT);
+		const REQUEST_DATA: &[u8] = b"GNET CONNECTION REQUEST";
 
-		let listener = {
-			let endpoint = ServerEndpoint::open(listener_addr).unwrap();
-			let endpoint = Arc::new(endpoint);
-			ConnectionListener::<_, ()>::new(endpoint)
-		};
-		let client = ClientEndpoint::open(client_addr).unwrap();
+		let packet_header = packet::PacketHeader::request_connection(REQUEST_DATA.len() as u16);
+		let mut packet_buffer = vec![0; C::PACKET_BYTE_COUNT];
 
-		const PACKET_SIZE: usize = 1200;
-		const PACKET_OFFSET: usize = 8;
+		packet::write_header(&mut packet_buffer[C::RESERVED_BYTE_COUNT ..], packet_header);
+		packet::write_data(&mut packet_buffer[C::RESERVED_BYTE_COUNT ..], REQUEST_DATA, 0);
 
-		assert_eq!(PACKET_SIZE, Arc::<ServerEndpoint>::PACKET_BYTE_COUNT);
-		assert_eq!(PACKET_SIZE, ClientEndpoint::PACKET_BYTE_COUNT);
-		assert_eq!(PACKET_OFFSET, Arc::<ServerEndpoint>::RESERVED_BYTE_COUNT);
-		assert_eq!(PACKET_OFFSET, ClientEndpoint::RESERVED_BYTE_COUNT);
-
-		let packet_header = packet::PacketHeader::request_connection(4);
-		let mut packet_buffer = vec![0; PACKET_SIZE];
-
-		packet::write_header(&mut packet_buffer[PACKET_OFFSET ..], packet_header);
-		packet::write_data(&mut packet_buffer[PACKET_OFFSET ..], b"GNET", 0);
-
-		let send_result = client.send_to(&mut packet_buffer, listener_addr);
-
-		assert_eq!(send_result.unwrap(), PACKET_SIZE);
+		assert_eq!(client.send_to(&mut packet_buffer, listener_addr).unwrap(), S::PACKET_BYTE_COUNT);
 
 		let accept_result = listener.try_accept(|addr, payload| -> AcceptDecision {
-			if addr == client_addr && b"GNET" == payload {
+			if addr == client_addr && payload == REQUEST_DATA {
 				AcceptDecision::Allow
 			} else {
 				AcceptDecision::Reject
@@ -173,35 +181,25 @@ mod test {
 		todo!("Send a packet through the connection")
 	}
 
-	#[test]
-	fn listener_denies() {
-		let listener_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1211));
-		let client_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1212));
+	/// Test that a [`ConnectionListener`](ConnectionListener) is able to deny new connections
+	/// using provided server and client endpoint implementations.
+	pub fn generic_listener_deny_test<S: Transmit + Listen + Clone, C: Transmit>(
+		(listener, listener_addr): (S, SocketAddr),
+		(client, client_addr): (C, SocketAddr),
+	) {
+		assert_eq!(S::PACKET_BYTE_COUNT, C::PACKET_BYTE_COUNT);
+		assert_eq!(S::RESERVED_BYTE_COUNT, C::RESERVED_BYTE_COUNT);
+		const REQUEST_DATA: &[u8] = b"GNET CONNECTION REQUEST";
 
-		let listener = {
-			let endpoint = ServerEndpoint::open(listener_addr).unwrap();
-			let endpoint = Arc::new(endpoint);
-			ConnectionListener::<_, ()>::new(endpoint)
-		};
-		let client = ClientEndpoint::open(client_addr).unwrap();
+		let listener = ConnectionListener::<S, ()>::new(listener);
 
-		const PACKET_SIZE: usize = 1200;
-		const PACKET_OFFSET: usize = 8;
+		let packet_header = packet::PacketHeader::request_connection(REQUEST_DATA.len() as u16);
+		let mut packet_buffer = vec![0; C::PACKET_BYTE_COUNT];
 
-		assert_eq!(PACKET_SIZE, Arc::<ServerEndpoint>::PACKET_BYTE_COUNT);
-		assert_eq!(PACKET_SIZE, ClientEndpoint::PACKET_BYTE_COUNT);
-		assert_eq!(PACKET_OFFSET, Arc::<ServerEndpoint>::RESERVED_BYTE_COUNT);
-		assert_eq!(PACKET_OFFSET, ClientEndpoint::RESERVED_BYTE_COUNT);
+		packet::write_header(&mut packet_buffer[C::RESERVED_BYTE_COUNT ..], packet_header);
+		packet::write_data(&mut packet_buffer[C::RESERVED_BYTE_COUNT ..], b"GNET", 0);
 
-		let packet_header = packet::PacketHeader::request_connection(4);
-		let mut packet_buffer = vec![0; PACKET_SIZE];
-
-		packet::write_header(&mut packet_buffer[PACKET_OFFSET ..], packet_header);
-		packet::write_data(&mut packet_buffer[PACKET_OFFSET ..], b"GNET", 0);
-
-		let send_result = client.send_to(&mut packet_buffer, listener_addr);
-
-		assert_eq!(send_result.unwrap(), PACKET_SIZE);
+		assert_eq!(client.send_to(&mut packet_buffer, listener_addr).unwrap(), S::PACKET_BYTE_COUNT);
 
 		let accept_result = listener.try_accept(|_, _| -> AcceptDecision {
 			AcceptDecision::Reject

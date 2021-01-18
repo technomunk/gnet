@@ -8,7 +8,7 @@ use std::iter::repeat;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::Mutex;
 
-use crate::connection::ConnectionId;
+use crate::id::ConnectionId;
 use crate::packet;
 
 use super::{Transmit, TransmitError, Listen, Open};
@@ -215,14 +215,17 @@ impl Open for ServerEndpoint {
 
 #[cfg(test)]
 mod test {
+	use std::sync::Arc;
+
+	use crate::endpoint::test::*;
+	use crate::listener::test::*;
+
 	use super::*;
-	
-	use super::super::test::*;
 
 	#[test]
 	fn basic_client_sends_and_receives() {
-		let a_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1111));
-		let b_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1112));
+		let a_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1100));
+		let b_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1101));
 
 		let a = ClientEndpoint::open(a_addr).unwrap();
 		let b = ClientEndpoint::open(b_addr).unwrap();
@@ -232,8 +235,8 @@ mod test {
 
 	#[test]
 	fn basic_server_sends_and_receives() {
-		let a_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1113));
-		let b_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1114));
+		let a_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1102));
+		let b_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1103));
 
 		let a = ServerEndpoint::open(a_addr).unwrap();
 		a.allow_connection_id(1);
@@ -245,8 +248,8 @@ mod test {
 
 	#[test]
 	fn basic_server_client_send_and_receive() {
-		let a_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1115));
-		let b_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1116));
+		let a_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1104));
+		let b_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1105));
 
 		let a = ServerEndpoint::open(a_addr).unwrap();
 		a.allow_connection_id(1);
@@ -257,12 +260,34 @@ mod test {
 
 	#[test]
 	fn basic_server_accepts_client() {
-		let server_addr = SocketAddr::from(([127, 0, 0, 1], 1131));
-		let client_addr = SocketAddr::from(([127, 0, 0, 1], 1132));
+		let server_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1107));
+		let client_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1108));
 
 		let server = ServerEndpoint::open(server_addr).unwrap();
 		let client = ClientEndpoint::open(client_addr).unwrap();
 
 		generic_accept_test((server, server_addr), (client, client_addr))
+	}
+
+	#[test]
+	fn basic_listener_accepts_client() {
+		let listener_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1109));
+		let client_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1110));
+
+		let listener = Arc::new(ServerEndpoint::open(listener_addr).unwrap());
+		let client = ClientEndpoint::open(client_addr).unwrap();
+
+		generic_listener_accept_test((listener, listener_addr), (client, client_addr))
+	}
+
+	#[test]
+	fn basic_listener_denies_client() {
+		let listener_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1111));
+		let client_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1112));
+
+		let listener = Arc::new(ServerEndpoint::open(listener_addr).unwrap());
+		let client = ClientEndpoint::open(client_addr).unwrap();
+
+		generic_listener_deny_test((listener, listener_addr), (client, client_addr))
 	}
 }

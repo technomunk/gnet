@@ -1,6 +1,7 @@
 //! Definitions of connection-related structs. This is the primary export of the library.
 
 use crate::byte::{ByteSerialize, SerializationError};
+use crate::id::ConnectionId;
 
 use super::endpoint::{Listen, Transmit, TransmitError};
 use super::packet;
@@ -13,11 +14,6 @@ use std::iter::repeat;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
-
-/// A unique index associated with a connection.
-///
-/// **NOTE**: `0` is a special value that means `no-connection-id`.
-pub(super) type ConnectionId = u16;
 
 const RESYNC_PERIOD: Duration = Duration::from_millis(200);
 
