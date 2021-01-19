@@ -42,19 +42,27 @@ connections and either *accept*, *deny* or *ignore* them.
 ### Establishing a connection
 
 In order to establish a connection a **server** and at least a single **client** is required. The
-**server** begins listening for incoming connections by constructing a `Listener`. Once the
-**server listener** is established a **client** may begin establishing a connection by calling
+**server** begins listening for incoming connections by opening a `ConnectionListener`. Once the
+**server listener** is established a **client** may begin establishing a connection by invoking
 `Connection::connect()` with the **server's** address. This creates a `PendingConnection`, which
-can repeatedly send a *connection request packet* to the server. If a *connection request packet*
-makes it to the **server**, it can then by processed by the **listener**. The **listener** can
-*accept*, *deny* or *ignore* the request. *Accepted* requests immediately create a `Connection` on
-the **server** and allow transmission of data from the server. The new `Connection` will transmit
-packets to the **client**, which will be able promote its `PendingConnection` to a full
-`Connection`, once those packets begin arriving. The **listener** may instead *deny* the
-connection, which will result in sending a single **packet** to the requesting client, explicitly
-denying the connection. It may also simply *ignore* the request, saving outgoing network traffic,
-reducing the client's responsiveness. The `PendingConnection` will be deemed failed if no answer
-is received within a *timeout* period or an explicit denial is received.
+initializes the [*establishing handshake*](#establishing-handshake). If the requested connection
+is accepted by the server the `PendingConnection` may be promoted to a fully functional
+`Connection` by using `try_promote()`. Once the client-side `Connection` is promoted it may be
+used to synchronize data between the **server** and the **client**. The `PendingConnection` will
+continue attempting to perform the [*establishing handshake*](#establishing-handshake) until it
+receives a rejection from the **server** or timeout period is reached, at which point any calls
+to `try_promote()` are guaranteed to return appropriate errors.
+
+### Establishing handshake
+
+A **client** generates a random *handshake id* and sends a `connection_request` packet with
+payload supplied from the application. Upon receiving the request, the `ConnectionListener`
+remembers the *handshake id* and associates a *connection id* with it, creating a new
+`Connection` that may be used by the **server**. The `ConnectionListener` also sends a
+`connection_accept` packet, which includes new client id and has the same *handshake id* as the
+request. The listener will repeatedly answer with `connection_accept` upon receiving duplicate
+`connection_request` with the same *handshake id* as the accepted request, as long as the
+`Connection` with the resulting id is live on the **server** side.
 
 ### Transmitting data
 

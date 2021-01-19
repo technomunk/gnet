@@ -22,8 +22,6 @@ use super::id::ConnectionId;
 /// Networked data is preluded with this fixed-size user-data.
 pub type DataPrelude = [u8; 4];
 
-pub type Hash = u32;
-
 /// An identifying index of the packet, used to order packets.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct PacketIndex(Wrapping<u8>);
@@ -34,10 +32,13 @@ mod signal {
 	#[derive(Debug, Clone, Copy)]
 	pub enum Signal {
 		/// The packet is a request for a new connection.
-		// (parcel bytes == 0, stream bytes => payload size)
+		// (parcel bytes == payload, stream bytes == 0)
 		ConnectionRequest,
 		/// The connection is about to be closed.
 		ConnectionClosed,
+		/// The connection requested was accepted.
+		// (connection_id == 0, parcel bytes == ConnectionId)
+		ConnectionAccepted,
 		/// This packet's id field is valid and should be acknowledged.
 		Synchronized,
 	}
@@ -45,17 +46,18 @@ mod signal {
 	/// Compacted bitpatterns for signalling protocol-level information.
 	///
 	/// Consists of:
-	/// | bit(s) | 31-25      | 24           | 23                | 22                 | 21-11           | 10-0         |
-	/// |--------|------------|--------------|-------------------|--------------------|-----------------|--------------|
-	/// | value  | `[zeroes]` | synchronized | connection_closed | connection_request | parcel(s) bytes | stream bytes |
+	/// | bit(s) | 31-27      | 25           | 24                | 23               | 22                 | 21-11           | 10-0         |
+	/// |--------|------------|--------------|-------------------|------------------|--------------------|-----------------|--------------|
+	/// | value  | `[zeroes]` | synchronized | connection_accept | connection_close | connection_request | parcel(s) bytes | stream bytes |
 	#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 	pub struct SignalBits(u32);
 
 	const CONNECTION_REQUEST_BIT: u32 = 1 << 22;
-	const CONNECTION_CLOSED_BIT: u32 = 1 << 23;
-	const SYNCHRONIZED_BIT: u32 = 1 << 24;
+	const CONNECTION_CLOSE_BIT: u32 = 1 << 23;
+	const CONNECTION_ACCEPT_BIT: u32 = 1 << 24;
+	const SYNCHRONIZED_BIT: u32 = 1 << 25;
 
-	const ZERO_BITS: u32 = 0xFFFF << 25;
+	const ZERO_BITS: u32 = 0xFFFF << 26;
 
 	const BYTE_COUNT_BITS: u32 = 0x7FF;
 	const FULL_BYTE_COUNT_BITS: u32 = BYTE_COUNT_BITS << 11 | BYTE_COUNT_BITS;
@@ -68,7 +70,8 @@ mod signal {
 		pub fn set_signal(&mut self, signal: Signal) {
 			match signal {
 				Signal::ConnectionRequest => self.0 |= CONNECTION_REQUEST_BIT,
-				Signal::ConnectionClosed => self.0 |= CONNECTION_CLOSED_BIT,
+				Signal::ConnectionClosed => self.0 |= CONNECTION_CLOSE_BIT,
+				Signal::ConnectionAccepted => self.0 |= CONNECTION_ACCEPT_BIT,
 				Signal::Synchronized => self.0 |= SYNCHRONIZED_BIT,
 			}
 		}
@@ -80,7 +83,8 @@ mod signal {
 		pub fn clear_signal(&mut self, signal: Signal) {
 			match signal {
 				Signal::ConnectionRequest => self.0 &= !CONNECTION_REQUEST_BIT,
-				Signal::ConnectionClosed => self.0 &= !CONNECTION_CLOSED_BIT,
+				Signal::ConnectionClosed => self.0 &= !CONNECTION_CLOSE_BIT,
+				Signal::ConnectionAccepted => self.0 &= !CONNECTION_ACCEPT_BIT,
 				Signal::Synchronized => self.0 &= !SYNCHRONIZED_BIT,
 			}
 		}
@@ -92,7 +96,8 @@ mod signal {
 		pub fn is_signal_set(&self, signal: Signal) -> bool {
 			match signal {
 				Signal::ConnectionRequest => (self.0 & CONNECTION_REQUEST_BIT) == CONNECTION_REQUEST_BIT,
-				Signal::ConnectionClosed => (self.0 & CONNECTION_CLOSED_BIT) == CONNECTION_CLOSED_BIT,
+				Signal::ConnectionClosed => (self.0 & CONNECTION_CLOSE_BIT) == CONNECTION_CLOSE_BIT,
+				Signal::ConnectionAccepted => (self.0 & CONNECTION_ACCEPT_BIT) == CONNECTION_ACCEPT_BIT,
 				Signal::Synchronized => (self.0 & SYNCHRONIZED_BIT) == SYNCHRONIZED_BIT,
 			}
 		}
@@ -145,6 +150,20 @@ mod signal {
 			Self(CONNECTION_REQUEST_BIT | (payload_byte_count << 11) as u32)
 		}
 
+		/// Create a bitpattern associated with a packet that is informing of the connection being rejected.
+		#[inline]
+		pub fn reject_connection(payload_byte_count: u16) -> Self {
+			debug_assert_eq!(payload_byte_count & BYTE_COUNT_BITS as u16, payload_byte_count);
+			Self(CONNECTION_CLOSE_BIT | (payload_byte_count << 11) as u32)
+		}
+
+		/// Create a bitpattern associated with a packet that is informing of the newly established connection.
+		#[inline]
+		pub fn accept_connection(payload_byte_count: u16) -> Self {
+			debug_assert_eq!(payload_byte_count & BYTE_COUNT_BITS as u16, payload_byte_count);
+			Self(CONNECTION_ACCEPT_BIT | (payload_byte_count << 11) as u32)
+		}
+
 		/// Create a bitpattern associated with an volatile (unsynchronized) packet with given parcel length.
 		#[inline]
 		pub fn volatile(parcel_byte_count: u16) -> Self {
@@ -161,30 +180,49 @@ mod signal {
 			Self(SYNCHRONIZED_BIT | ((parcel_byte_count as u32) << 11) | stream_byte_count as u32)
 		}
 
-		/// Create a bitpattern associated with a packet that is informing of the connection being rejected.
-		#[inline]
-		pub fn reject(payload_byte_count: u16) -> Self {
-			debug_assert_eq!(payload_byte_count & BYTE_COUNT_BITS as u16, payload_byte_count);
-			Self(CONNECTION_CLOSED_BIT | payload_byte_count as u32)
-		}
-
-		/// Check that a given bitpattern is a valid one in GNet protocol associated with a connectionless packet.
+		/// Check that a given bitpattern is a valid in GNet protocol context if it is included in
+		/// a packet NOT associated with a particular connection.
 		#[inline]
 		pub fn is_valid_connectionless(&self) -> bool {
 			const CRITICAL_BITS: u32 =
 				ZERO_BITS
 				| SYNCHRONIZED_BIT
-				| CONNECTION_CLOSED_BIT
+				| CONNECTION_ACCEPT_BIT
+				| CONNECTION_CLOSE_BIT
 				| CONNECTION_REQUEST_BIT
+				// parcel bits may be non-zero
 				| BYTE_COUNT_BITS;
-			(self.0 & CRITICAL_BITS) == CONNECTION_REQUEST_BIT
+			matches!(
+				self.0 & CRITICAL_BITS,
+				CONNECTION_REQUEST_BIT | CONNECTION_ACCEPT_BIT | CONNECTION_CLOSE_BIT,
+			)
 		}
 
-		/// Check that a given bitpattern is a valid one in GNet protocol.
+		/// Check that a given bitpattern is a valid in GNet protocol context if it is included in
+		/// a packet associated with a particular connection.
+		pub fn is_valid_connected(&self) -> bool {
+			const CRITICAL_BITS: u32 =
+				ZERO_BITS
+				| SYNCHRONIZED_BIT
+				| CONNECTION_ACCEPT_BIT
+				| CONNECTION_CLOSE_BIT
+				| CONNECTION_REQUEST_BIT;
+			matches!(self.0 & CRITICAL_BITS, 0 | SYNCHRONIZED_BIT)
+		}
+
+		/// Check that a given bitpattern is a valid in GNet protocol context.
 		#[inline]
 		pub fn is_valid(&self) -> bool {
-			const CRITICAL_BITS: u32 = ZERO_BITS | SYNCHRONIZED_BIT | CONNECTION_CLOSED_BIT | CONNECTION_REQUEST_BIT;
-			matches!(self.0 & CRITICAL_BITS, 0 | SYNCHRONIZED_BIT | CONNECTION_CLOSED_BIT | CONNECTION_REQUEST_BIT)
+			const CRITICAL_BITS: u32 =
+				ZERO_BITS
+				| SYNCHRONIZED_BIT
+				| CONNECTION_ACCEPT_BIT
+				| CONNECTION_CLOSE_BIT
+				| CONNECTION_REQUEST_BIT;
+			matches!(
+				self.0 & CRITICAL_BITS,
+				0 | SYNCHRONIZED_BIT | CONNECTION_ACCEPT_BIT | CONNECTION_CLOSE_BIT | CONNECTION_REQUEST_BIT,
+			)
 		}
 	}
 
@@ -301,18 +339,30 @@ impl PacketHeader {
 
 	/// Create a packet header associated with a connection request.
 	#[inline]
-	pub fn request_connection(payload_byte_count: u16) -> Self {
+	pub fn request_connection(handhsake_id: DataPrelude, payload_byte_count: u16) -> Self {
 		Self {
 			signal: SignalBits::request_connection(payload_byte_count),
+			prelude: handhsake_id,
 			.. Self::zero()
 		}
 	}
 
 	/// Create a packet header for a connection-rejecting packet.
 	#[inline]
-	pub fn reject(payload_byte_count: u16) -> Self {
+	pub fn reject_connection(handshake_id: DataPrelude, payload_byte_count: u16) -> Self {
 		Self {
-			signal: SignalBits::reject(payload_byte_count),
+			signal: SignalBits::reject_connection(payload_byte_count),
+			prelude: handshake_id,
+			.. Self::zero()
+		}
+	}
+
+	/// Create a packet header for a connection-accepting packet.
+	#[inline]
+	pub fn accept_connection(handshake_id: DataPrelude, payload_byte_count: u16) -> Self {
+		Self {
+			signal: SignalBits::accept_connection(payload_byte_count),
+			prelude: handshake_id,
 			.. Self::zero()
 		}
 	}
@@ -339,13 +389,19 @@ impl PacketHeader {
 		self.connection_id == 0 && self.signal.is_valid_connectionless()
 	}
 
+	/// Check that the PacketHeader is a valid GNet packet header associated with a connection.
+	#[inline]
+	pub fn is_valid_connected(&self) -> bool {
+		self.connection_id != 0 && self.signal.is_valid_connected()
+	}
+
 	/// Check that the PacketHeader is a valid GNet packet header.
 	#[inline]
 	pub fn is_valid(&self) -> bool {
 		if self.connection_id == 0 {
-			self.signal.is_valid_connectionless()
+			self.is_valid_connectionless()
 		} else {
-			self.signal.is_valid()
+			self.is_valid_connected()
 		}
 	}
 
@@ -438,6 +494,15 @@ pub fn is_valid(packet: &[u8]) -> bool {
 		&& header.get_payload_byte_count() <= (packet.len() - size_of::<PacketHeader>()) as u16
 }
 
+/// Check whether the provided packet is a valid GNet packet associated with a connection.
+#[inline]
+pub fn is_valid_connected(packet: &[u8]) -> bool {
+	debug_assert!(packet.len() >= size_of::<PacketHeader>());
+	let &header = get_header(packet);
+	header.is_valid_connected()
+		&& header.get_payload_byte_count() <= (packet.len() - size_of::<PacketHeader>()) as u16
+}
+
 /// Check whether the provided packet is a valid connectionless GNet packet.
 #[inline]
 pub fn is_valid_connectionless(packet: &[u8]) -> bool {
@@ -471,7 +536,7 @@ mod test {
 
 	#[test]
 	fn packet_header_acknowledgement_is_correct() {
-		let mut header = PacketHeader::request_connection(0);
+		let mut header = PacketHeader::request_connection([ 1, 2, 3, 4, ], 0);
 
 		header.ack_packet_id = 17.into();
 		header.ack_packet_mask = 7 << 14;

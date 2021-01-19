@@ -1,5 +1,9 @@
 //! Definitions of connection-related structs. This is the primary export of the library.
 
+mod error;
+
+pub use error::{ConnectError, ConnectionError, PendingConnectionError};
+
 use crate::byte::{ByteSerialize, SerializationError};
 use crate::id::ConnectionId;
 
@@ -8,49 +12,14 @@ use super::packet;
 use super::packet::PacketHeader;
 use super::Parcel;
 
-use std::error::Error;
-use std::io::Error as IoError;
+use rand::random;
+
 use std::iter::repeat;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 const RESYNC_PERIOD: Duration = Duration::from_millis(200);
-
-/// An error raised during connection process.
-#[derive(Debug)]
-pub enum ConnectError {
-	Io(IoError),
-	PayloadTooLarge,
-}
-
-/// An error during the operation of a [`Connection`](Connection).
-#[derive(Debug)]
-pub enum ConnectionError {
-	/// The connection has no pending parcels to pop.
-	NoPendingParcels,
-	/// An error during deserialization of a parcel.
-	Serialization(SerializationError),
-	/// The connection was in an invalid state.
-	InvalidState,
-	/// An unexpected IO error ocurred.
-	Io(IoError),
-}
-
-/// An error specific to a pending connection.
-#[derive(Debug)]
-pub enum PendingConnectionError<T: Transmit, P: Parcel> {
-	/// No answer has yet been received.
-	NoAnswer(PendingConnection<T, P>),
-	/// The answer has been received, but it was incorrect.
-	InvalidAnswer(PendingConnection<T, P>),
-	/// An unexpected IO error ocurred.
-	Io(IoError),
-	/// The connection has been actively rejected by the other end (and subsequently consumed).
-	Rejected,
-	/// The predicate passed to `try_promote()` returned false.
-	PredicateFail,
-}
 
 /// State of a [Connection](Connection).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -103,21 +72,6 @@ pub struct Connection<T: Transmit, P: Parcel> {
 	_message_type: PhantomData<P>,
 }
 
-/// A temporary connection that is in the process of being established for the first time.
-///
-/// Primary purpose is to be promoted to a full connection once established or dropped on timeout.
-#[derive(Debug)]
-pub struct PendingConnection<T: Transmit, P: Parcel> {
-	endpoint: T,
-	remote: SocketAddr,
-	packet_buffer: Vec<u8>,
-	last_sent_packet_time: Instant,
-	last_communication_time: Instant,
-	payload: Vec<u8>,
-
-	_message_type: PhantomData<P>,
-}
-
 impl<T: Transmit, P: Parcel> Connection<T, P> {
 	/// Construct a connection in an open state.
 	pub(crate) fn opened(endpoint: T, connection_id: ConnectionId, remote: SocketAddr) -> Self {
@@ -140,84 +94,11 @@ impl<T: Transmit, P: Parcel> Connection<T, P> {
 	}
 }
 
-impl std::convert::From<IoError> for ConnectError {
-	fn from(error: IoError) -> Self {
-		Self::Io(error)
-	}
-}
-
-impl std::fmt::Display for ConnectError {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			ConnectError::Io(error) => error.fmt(f),
-			ConnectError::PayloadTooLarge => write!(f, "payload too large"),
-		}
-	}
-}
-
-impl Error for ConnectError {
-	fn source(&self) -> Option<&(dyn Error + 'static)> {
-		match self {
-			ConnectError::Io(error) => Some(error as &dyn Error),
-			_ => None,
-		}
-	}
-}
-
-impl std::fmt::Display for ConnectionError {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			ConnectionError::NoPendingParcels => write!(f, "no pending parcels to pop"),
-			ConnectionError::InvalidState => write!(f, "the connection was in an invalid state for given operation"),
-			ConnectionError::Serialization(error) => error.fmt(f),
-			ConnectionError::Io(error) => error.fmt(f),
-		}
-	}
-}
-
-impl Error for ConnectionError {
-	fn source(&self) -> Option<&(dyn Error + 'static)> {
-		match self {
-			ConnectionError::Serialization(error) => Some(error as &dyn Error),
-			ConnectionError::Io(error) => Some(error as &dyn Error),
-			_ => None,
-		}
-	}
-}
-
-impl<T: Transmit, P: Parcel> std::fmt::Display for PendingConnectionError<T, P> {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			PendingConnectionError::NoAnswer(_) => write!(f, "no answer has yet been received"),
-			PendingConnectionError::InvalidAnswer(_) => write!(f, "an misformed answer has been received"),
-			PendingConnectionError::Io(error) => error.fmt(f),
-			PendingConnectionError::Rejected => write!(f, "connection has been actively rejected by the other end"),
-			PendingConnectionError::PredicateFail => write!(f, "the answer from the other end failed the predicate"),
-		}
-	}
-}
-
-impl<T, P> Error for PendingConnectionError<T, P>
-where
-	T: Transmit + std::fmt::Debug,
-	P: Parcel + std::fmt::Debug,
-{
-	fn source(&self) -> Option<&(dyn Error + 'static)> {
-		match self {
-			PendingConnectionError::Io(error) => Some(error as &dyn Error),
-			_ => None,
-		}
-	}
-}
-
-impl<T: Transmit, P: Parcel> From<IoError> for PendingConnectionError<T, P> {
-	fn from(error: IoError) -> Self {
-		PendingConnectionError::Io(error)
-	}
-}
-
 impl<T: Transmit, P: Parcel> Connection<T, P> {
-	const PAYLOAD_BYTE_COUNT: usize = T::PACKET_BYTE_COUNT - std::mem::size_of::<PacketHeader>() - T::RESERVED_BYTE_COUNT;
+	const PAYLOAD_BYTE_COUNT: usize =
+		T::PACKET_BYTE_COUNT
+		- std::mem::size_of::<PacketHeader>()
+		- T::RESERVED_BYTE_COUNT;
 
 	/// Attempt to establish a new connection to provided remote address from provided local one.
 	#[inline]
@@ -229,11 +110,12 @@ impl<T: Transmit, P: Parcel> Connection<T, P> {
 		if payload.len() > Self::PAYLOAD_BYTE_COUNT {
 			Err(ConnectError::PayloadTooLarge)
 		} else {
+			let handshake_id = random::<u32>().to_ne_bytes();
 			let mut packet_buffer = Vec::with_capacity(T::PACKET_BYTE_COUNT);
 			packet_buffer.resize_with(T::PACKET_BYTE_COUNT, Default::default);
 			packet::write_header(
 				&mut packet_buffer,
-				PacketHeader::request_connection(payload.len() as u16),
+				PacketHeader::request_connection(handshake_id, payload.len() as u16),
 			);
 			if !payload.is_empty() {
 				packet::write_data(&mut packet_buffer, &payload, 0);
@@ -248,6 +130,7 @@ impl<T: Transmit, P: Parcel> Connection<T, P> {
 				last_sent_packet_time: communication_time,
 				last_communication_time: communication_time,
 				payload,
+				handshake_id,
 				_message_type: PhantomData,
 			})
 		}
@@ -366,50 +249,52 @@ impl<T: Transmit, P: Parcel> Connection<T, P> {
 	pub fn pending_incoming_stream_bytes(&self) -> Result<usize, ConnectionError> {
 		todo!()
 	}
+
+	/// Flush any outgoing packets.
+	/// 
+	/// # Notes
+	/// Flushing may cause loss of efficiency in network utilization, as the sent packets may
+	/// not be fully filled.
+	pub fn flush(&mut self) -> Result<(), ConnectionError> {
+		todo!()
+	}
+}
+
+impl<T: Transmit, P: Parcel> PartialEq for Connection<T, P> {
+	fn eq(&self, rhs: &Self) -> bool {
+		self.connection_id == rhs.connection_id && self.remote == rhs.remote
+	}
+}
+
+/// A temporary connection that is in the process of being established for the first time.
+///
+/// Primary purpose is to be promoted to a full connection once established or dropped on timeout.
+#[derive(Debug)]
+pub struct PendingConnection<T: Transmit, P: Parcel> {
+	endpoint: T,
+	remote: SocketAddr,
+	packet_buffer: Vec<u8>,
+	last_sent_packet_time: Instant,
+	last_communication_time: Instant,
+	payload: Vec<u8>,
+	handshake_id: packet::DataPrelude,
+
+	_message_type: PhantomData<P>,
 }
 
 impl<T: Transmit, P: Parcel> PendingConnection<T, P> {
-	/// Attempt to promote the pending connection to a full Connection.
+	/// Attempt to promote the pending connection to a full [`Connection`](Connection).
 	///
-	/// Receives any pending network packets, supplying their payload to provided predicate.
-	/// If the predicate returns true promotes to full [`Connection`](Self) in
-	/// [`ConnectionStatus::Open`](ConnectionStatus::Open) state.
-	pub fn try_promote<F: FnOnce(&[u8]) -> bool>(
-		mut self,
-		predicate: F,
-	) -> Result<Connection<T, P>, PendingConnectionError<T, P>> {
+	/// Receives any pending network packets, promoting the connection to a full
+	/// [`Connection`](Connection) if valid GNet packets were received.
+	pub fn try_promote(mut self) -> Result<Connection<T, P>, PendingConnectionError<T, P>> {
 		if let Err(error) = self.endpoint.recv_all(&mut self.packet_buffer, 0) {
 			match error {
 				TransmitError::Io(error) => return Err(PendingConnectionError::Io(error)),
 				TransmitError::NoPendingPackets => (),
 			}
 		};
-		if self.packet_buffer.is_empty() {
-			Err(PendingConnectionError::NoAnswer(self))
-		} else {
-			let packet = &self.packet_buffer[T::RESERVED_BYTE_COUNT .. T::PACKET_BYTE_COUNT];
-			let packet_header = packet::get_header(packet);
-			if packet_header.connection_id == 0
-			&& packet_header.signal.is_signal_set(packet::Signal::ConnectionClosed) {
-				Err(PendingConnectionError::PredicateFail)
-			} else {
-				Ok(Connection {
-					endpoint: self.endpoint,
-					remote: self.remote,
-					connection_id: packet_header.connection_id,
-					packet_buffer: self.packet_buffer,
-					status: ConnectionStatus::Open,
-					last_sent_packet_time: self.last_sent_packet_time,
-					last_received_packet_time: Instant::now(),
-
-					sent_packet_buffer: Vec::with_capacity(65),
-					received_packet_ack_id: 0.into(),
-					received_packet_ack_mask: 0,
-
-					_message_type: self._message_type,
-				})
-			}
-		}
+		todo!()
 	}
 
 	/// Get the span of time passed since the last request for the connection has been sent.
@@ -435,7 +320,7 @@ impl<T: Transmit, P: Parcel> PendingConnection<T, P> {
 			let work_slice = &mut self.packet_buffer[original_len ..];
 			packet::write_header(
 				work_slice,
-				PacketHeader::request_connection(self.payload.len() as u16),
+				PacketHeader::request_connection(self.handshake_id, self.payload.len() as u16),
 			);
 			if !self.payload.is_empty() {
 				packet::write_data(work_slice, &self.payload, 0);

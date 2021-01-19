@@ -22,7 +22,7 @@ pub struct ConnectionListener<E: Transmit + Listen + Clone, P: Parcel> {
 }
 
 /// An error raised trying to accept an incoming connection.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum AcceptError {
 	/// Something happened attempting to read an incoming packet
 	Transmit(TransmitError),
@@ -146,29 +146,29 @@ impl std::error::Error for AcceptError {}
 #[cfg(test)]
 pub mod test {
 	use crate::packet;
+	use crate::packet::DataPrelude;
+	use crate::connection::{Connection, PendingConnectionError};
 	use super::*;
+	use std::mem::size_of;
 
 	/// Test that a [`ConnectionListener`](ConnectionListener) is able to accept new connections
 	/// using provided server and client endpoint implementations.
-	pub fn generic_listener_accept_test<S: Transmit + Listen + Clone, C: Transmit>(
+	pub fn test_accept<S, C>(
 		(listener, listener_addr): (S, SocketAddr),
 		(client, client_addr): (C, SocketAddr),
-	) {
-		let listener = ConnectionListener::<S, ()>::new(listener);
-
+	) where
+		S: Transmit + Listen + Clone,
+		C: Transmit + std::fmt::Debug, 
+	{
 		assert_eq!(S::PACKET_BYTE_COUNT, C::PACKET_BYTE_COUNT);
 		assert_eq!(S::RESERVED_BYTE_COUNT, C::RESERVED_BYTE_COUNT);
 		const REQUEST_DATA: &[u8] = b"GNET CONNECTION REQUEST";
 
-		let packet_header = packet::PacketHeader::request_connection(REQUEST_DATA.len() as u16);
-		let mut packet_buffer = vec![0; C::PACKET_BYTE_COUNT];
+		let server = ConnectionListener::<S, ()>::new(listener);
+		let client_con = Connection::<C, ()>::connect(client, listener_addr, REQUEST_DATA.to_vec())
+			.expect("Failed to begin establishing client connection!");
 
-		packet::write_header(&mut packet_buffer[C::RESERVED_BYTE_COUNT ..], packet_header);
-		packet::write_data(&mut packet_buffer[C::RESERVED_BYTE_COUNT ..], REQUEST_DATA, 0);
-
-		assert_eq!(client.send_to(&mut packet_buffer, listener_addr).unwrap(), S::PACKET_BYTE_COUNT);
-
-		let accept_result = listener.try_accept(|addr, payload| -> AcceptDecision {
+		let accept_result = server.try_accept(|addr, payload| -> AcceptDecision {
 			if addr == client_addr && payload == REQUEST_DATA {
 				AcceptDecision::Allow
 			} else {
@@ -176,38 +176,31 @@ pub mod test {
 			}
 		});
 
-		assert!(accept_result.is_ok());
-
-		todo!("Send a packet through the connection")
+		accept_result.expect("Failed to accept a connection!");
+		client_con.try_promote().expect("Failed to promote client connection!");
 	}
 
 	/// Test that a [`ConnectionListener`](ConnectionListener) is able to deny new connections
 	/// using provided server and client endpoint implementations.
-	pub fn generic_listener_deny_test<S: Transmit + Listen + Clone, C: Transmit>(
+	pub fn test_deny<S, C>(
 		(listener, listener_addr): (S, SocketAddr),
 		(client, client_addr): (C, SocketAddr),
-	) {
+	) where
+		S: Transmit + Listen + Clone + std::fmt::Debug,
+		C: Transmit + std::fmt::Debug,
+	{
 		assert_eq!(S::PACKET_BYTE_COUNT, C::PACKET_BYTE_COUNT);
 		assert_eq!(S::RESERVED_BYTE_COUNT, C::RESERVED_BYTE_COUNT);
 
-		let listener = ConnectionListener::<S, ()>::new(listener);
+		let server = ConnectionListener::<S, ()>::new(listener);
+		let client_con = Connection::<C, ()>::connect(client, listener_addr, vec![])
+			.expect("Failed to begin establishing client connection!");
 
-		let packet_header = packet::PacketHeader::request_connection(0);
-		let mut packet_buffer = vec![0; C::PACKET_BYTE_COUNT];
-
-		packet::write_header(&mut packet_buffer[C::RESERVED_BYTE_COUNT ..], packet_header);
-
-		assert_eq!(client.send_to(&mut packet_buffer, listener_addr).unwrap(), S::PACKET_BYTE_COUNT);
-
-		let accept_result = listener.try_accept(|_, _| -> AcceptDecision {
+		let accept_result = server.try_accept(|_, _| -> AcceptDecision {
 			AcceptDecision::Reject
 		});
 
-		if let Err(AcceptError::PredicateFail) = accept_result {
-		} else {
-			panic!("try_accept() did not fail as expected!");
-		}
-		
-		todo!("Check that the client endpoint receives a cancel")
+		assert_eq!(accept_result, Err(AcceptError::PredicateFail));
+		assert_eq!(client_con.try_promote(), Err(PendingConnectionError::Rejected));
 	}
 }

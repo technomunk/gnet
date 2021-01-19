@@ -2,6 +2,7 @@
 //! 
 //! These should be used as basis or examples for more advanced endpoints provided by the library
 //! or other crates.
+
 use std::collections::{HashMap, VecDeque};
 use std::io::{Error as IoError, ErrorKind as IoErrorKind};
 use std::iter::repeat;
@@ -223,18 +224,19 @@ mod test {
 	use super::*;
 
 	#[test]
-	fn basic_client_sends_and_receives() {
+	fn client_client_transmit() {
 		let a_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1100));
 		let b_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1101));
 
 		let a = ClientEndpoint::open(a_addr).unwrap();
 		let b = ClientEndpoint::open(b_addr).unwrap();
 
-		generic_send_and_receive_test((a, a_addr), (b, b_addr))
+		test_transmit(&a, &b, b_addr);
+		test_transmit(&b, &a, a_addr);
 	}
 
 	#[test]
-	fn basic_server_sends_and_receives() {
+	fn server_server_transmit() {
 		let a_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1102));
 		let b_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1103));
 
@@ -243,51 +245,53 @@ mod test {
 		let b = ServerEndpoint::open(b_addr).unwrap();
 		b.allow_connection_id(1);
 
-		generic_send_and_receive_test((a, a_addr), (b, b_addr))
+		test_transmit(&a, &b, b_addr);
+		test_transmit(&b, &a, a_addr);
 	}
 
 	#[test]
-	fn basic_server_client_send_and_receive() {
+	fn server_client_transmit() {
 		let a_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1104));
 		let b_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1105));
 
-		let a = ServerEndpoint::open(a_addr).unwrap();
-		a.allow_connection_id(1);
-		let b = ClientEndpoint::open(b_addr).unwrap();
+		let a = ClientEndpoint::open(a_addr).unwrap();
+		let b = ServerEndpoint::open(b_addr).unwrap();
+		b.allow_connection_id(1);
 
-		generic_send_and_receive_test((a, a_addr), (b, b_addr))
+		test_transmit(&a, &b, b_addr);
+		test_transmit(&b, &a, a_addr);
 	}
-
+	
 	#[test]
-	fn basic_server_accepts_client() {
-		let server_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1107));
-		let client_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1108));
+	fn server_listens_for_client() {
+		let server_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1106));
+		let client_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1107));
 
 		let server = ServerEndpoint::open(server_addr).unwrap();
 		let client = ClientEndpoint::open(client_addr).unwrap();
 
-		generic_accept_test((server, server_addr), (client, client_addr))
+		test_listen((&server, server_addr), (&client, client_addr));
 	}
 
 	#[test]
-	fn basic_listener_accepts_client() {
-		let listener_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1109));
-		let client_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1110));
+	fn server_accepts_client() {
+		let listener_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1108));
+		let client_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1109));
+
+		let mut listener = Arc::new(ServerEndpoint::open(listener_addr).unwrap());
+		let mut client = ClientEndpoint::open(client_addr).unwrap();
+
+		test_listen((&mut listener, listener_addr), (&mut client, client_addr));
+	}
+
+	#[test]
+	fn server_denies_client() {
+		let listener_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1110));
+		let client_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1111));
 
 		let listener = Arc::new(ServerEndpoint::open(listener_addr).unwrap());
 		let client = ClientEndpoint::open(client_addr).unwrap();
 
-		generic_listener_accept_test((listener, listener_addr), (client, client_addr))
-	}
-
-	#[test]
-	fn basic_listener_denies_client() {
-		let listener_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1111));
-		let client_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 1112));
-
-		let listener = Arc::new(ServerEndpoint::open(listener_addr).unwrap());
-		let client = ClientEndpoint::open(client_addr).unwrap();
-
-		generic_listener_deny_test((listener, listener_addr), (client, client_addr))
+		test_deny((listener, listener_addr), (client, client_addr));
 	}
 }

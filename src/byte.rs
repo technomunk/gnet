@@ -8,6 +8,8 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 pub enum SerializationError {
 	/// Serialization would cause a buffer-overflow.
 	BufferOverflow,
+	/// Encountered an unexpected (uninterpretable) value during serialization.
+	UnexpectedValue,
 }
 
 // TODO: custom #[derive(ByteSerialize)]
@@ -53,3 +55,10 @@ impl Display for SerializationError {
 }
 
 impl Error for SerializationError {}
+
+impl From<std::string::FromUtf8Error> for SerializationError {
+	#[inline]
+	fn from(error: std::string::FromUtf8Error) -> Self {
+		Self::UnexpectedValue
+	}
+}

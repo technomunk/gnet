@@ -6,11 +6,10 @@
 
 #[cfg(feature = "basic-endpoints")]
 pub mod basic;
+mod wrapper;
 
 use std::io::Error as IoError;
 use std::net::SocketAddr;
-use std::rc::Rc;
-use std::sync::Arc;
 
 use super::id::ConnectionId;
 
@@ -115,6 +114,19 @@ pub trait Open: Sized {
 	fn open(addr: SocketAddr) -> Result<Self, IoError>;
 }
 
+impl PartialEq for TransmitError {
+	fn eq(&self, rhs: &Self) -> bool {
+		match self {
+			Self::NoPendingPackets => matches!(rhs, Self::NoPendingPackets),
+			Self::Io(lhs_error) => if let Self::Io(rhs_error) = rhs {
+				lhs_error.kind() == rhs_error.kind()
+			} else {
+				false
+			},
+		}
+	}
+}
+
 impl std::fmt::Display for TransmitError {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
@@ -138,85 +150,31 @@ impl std::error::Error for TransmitError {
 	}
 }
 
-impl<T: Transmit> Transmit for Rc<T> {
-	const PACKET_BYTE_COUNT: usize = T::PACKET_BYTE_COUNT;
-	const RESERVED_BYTE_COUNT: usize = T::RESERVED_BYTE_COUNT;
-
-	fn send_to(&self, data: &mut [u8], addr: SocketAddr) -> Result<usize, IoError> {
-		T::send_to(self, data, addr)
-	}
-
-	fn recv_all(
-		&self,
-		buffer: &mut Vec<u8>,
-		connection_id: ConnectionId
-	) -> Result<usize, TransmitError> {
-		T::recv_all(self, buffer, connection_id)
-	}
-}
-
-impl<T: Transmit> Transmit for Arc<T> {
-	const PACKET_BYTE_COUNT: usize = T::PACKET_BYTE_COUNT;
-	const RESERVED_BYTE_COUNT: usize = T::RESERVED_BYTE_COUNT;
-
-	fn send_to(&self, data: &mut [u8], addr: SocketAddr) -> Result<usize, IoError> {
-		T::send_to(self, data, addr)
-	}
-
-	fn recv_all(
-		&self,
-		buffer: &mut Vec<u8>,
-		connection_id: ConnectionId
-	) -> Result<usize, TransmitError> {
-		T::recv_all(self, buffer, connection_id)
-	}
-}
-
-impl<L: Listen> Listen for Rc<L> {
-	fn allow_connection_id(&self, connection_id: ConnectionId) {
-		L::allow_connection_id(self, connection_id)
-	}
-
-	fn block_connection_id(&self, connection_id: ConnectionId) {
-		L::block_connection_id(self, connection_id)
-	}
-
-	fn pop_connectionless_packet(&self) -> Result<(SocketAddr, Box<[u8]>), TransmitError> {
-		L::pop_connectionless_packet(self)
-	}
-}
-
-impl<L: Listen> Listen for Arc<L> {
-	fn allow_connection_id(&self, connection_id: ConnectionId) {
-		L::allow_connection_id(self, connection_id)
-	}
-
-	fn block_connection_id(&self, connection_id: ConnectionId) {
-		L::block_connection_id(self, connection_id)
-	}
-
-	fn pop_connectionless_packet(&self) -> Result<(SocketAddr, Box<[u8]>), TransmitError> {
-		L::pop_connectionless_packet(self)
-	}
-}
-
 #[cfg(test)]
 pub mod test {
 	use super::*;
+	use crate::byte::ByteSerialize;
 	use crate::packet;
+	use crate::packet::DataPrelude;
+
+	use std::mem::size_of;
 
 	#[inline]
 	fn get_packet_id<T: Transmit>(packet: &[u8]) -> packet::PacketIndex {
 		packet::get_header(&packet[T::RESERVED_BYTE_COUNT ..]).packet_id
 	}
 
-	/// Test that 2 endpoints are able to send GNet packets to each other.
-	pub fn generic_send_and_receive_test<A: Transmit, B: Transmit>(
-		(a, a_addr): (A, SocketAddr),
-		(b, b_addr): (B, SocketAddr),
+	/// Test that receiver implementation is able to receive GNet packets sent from sender implementation.
+	///
+	/// # Note
+	/// The test uses `connection_id` 1 in sent packets. It is allowed to filter packets by connection id.
+	pub fn test_transmit<S: Transmit, R: Transmit>(
+		sender: &S,
+		receiver: &R,
+		receiver_addr: SocketAddr,
 	) {
-		assert_eq!(A::PACKET_BYTE_COUNT, B::PACKET_BYTE_COUNT);
-		assert_eq!(A::RESERVED_BYTE_COUNT, B::RESERVED_BYTE_COUNT);
+		assert_eq!(S::PACKET_BYTE_COUNT, R::PACKET_BYTE_COUNT);
+		assert_eq!(S::RESERVED_BYTE_COUNT, R::RESERVED_BYTE_COUNT);
 		const PAYLOAD_DATA: &[u8] = b"TEST DATA";
 
 		let mut packet_header = packet::PacketHeader {
@@ -228,67 +186,79 @@ pub mod test {
 			prelude: [ 1, 2, 3, 4, ],
 		};
 
-		let mut packet_buffer = vec![0; A::PACKET_BYTE_COUNT];
+		let mut packet_buffer = vec![0; S::PACKET_BYTE_COUNT];
 
-		// Send just 1 packet A to B
+		// Send 1 packet
 
-		packet::write_header(&mut packet_buffer[A::RESERVED_BYTE_COUNT ..], packet_header);
-		packet::write_data(&mut packet_buffer[A::RESERVED_BYTE_COUNT ..], PAYLOAD_DATA, 0);
+		packet::write_header(&mut packet_buffer[S::RESERVED_BYTE_COUNT ..], packet_header);
+		packet::write_data(&mut packet_buffer[S::RESERVED_BYTE_COUNT ..], PAYLOAD_DATA, 0);
 
-		assert_eq!(A::PACKET_BYTE_COUNT, a.send_to(&mut packet_buffer, b_addr).unwrap());
+		assert_eq!(
+			sender.send_to(&mut packet_buffer, receiver_addr).expect("Failed to send first packet!"),
+			S::PACKET_BYTE_COUNT,
+		);
 
 		packet_buffer.clear();
-		let recv_result = b.recv_all(&mut packet_buffer, 1);
+		assert_eq!(receiver.recv_all(&mut packet_buffer, 1), Ok(R::PACKET_BYTE_COUNT));
 
-		let packet = &packet_buffer[A::RESERVED_BYTE_COUNT ..];
-		assert_eq!(recv_result.unwrap(), A::PACKET_BYTE_COUNT);
-		assert_eq!(packet_buffer.len(), A::PACKET_BYTE_COUNT);
+		let packet = &packet_buffer[R::RESERVED_BYTE_COUNT ..];
+		assert_eq!(packet_buffer.len(), R::PACKET_BYTE_COUNT);
 		assert_eq!(*packet::get_header(packet), packet_header);
 		assert_eq!(packet::get_parcel_segment(packet), PAYLOAD_DATA);
 
-		// Send 2 packets B to A
+		// Send 2 packets
 
 		packet_header.packet_id = packet_header.packet_id.next();
-		packet::write_header(&mut packet_buffer[B::RESERVED_BYTE_COUNT ..], packet_header);
+		packet::write_header(&mut packet_buffer[S::RESERVED_BYTE_COUNT ..], packet_header);
 
-		assert_eq!(b.send_to(&mut packet_buffer, a_addr).unwrap(), A::PACKET_BYTE_COUNT);
+		assert_eq!(
+			sender.send_to(&mut packet_buffer, receiver_addr).expect("Failed to send second packet!"),
+			S::PACKET_BYTE_COUNT,
+		);
 
 		packet_header.packet_id = packet_header.packet_id.next();
-		packet::write_header(&mut packet_buffer[B::RESERVED_BYTE_COUNT ..], packet_header);
+		packet::write_header(&mut packet_buffer[S::RESERVED_BYTE_COUNT ..], packet_header);
 
-		assert_eq!(b.send_to(&mut packet_buffer, a_addr).unwrap(), A::PACKET_BYTE_COUNT);
+		assert_eq!(
+			sender.send_to(&mut packet_buffer, receiver_addr).expect("Failed to send third packet!"),
+			S::PACKET_BYTE_COUNT,
+		);
 
-		assert_eq!(a.recv_all(&mut packet_buffer, 1).unwrap(), A::PACKET_BYTE_COUNT * 2);
-		assert_eq!(packet_buffer.len(), A::PACKET_BYTE_COUNT * 3);
+		assert_eq!(receiver.recv_all(&mut packet_buffer, 1), Ok(R::PACKET_BYTE_COUNT * 2));
+		assert_eq!(packet_buffer.len(), R::PACKET_BYTE_COUNT * 3);
 
-		let packet = &packet_buffer[A::PACKET_BYTE_COUNT .. A::PACKET_BYTE_COUNT * 2];
-		assert_eq!(get_packet_id::<A>(packet), 2.into());
+		let packet = &packet_buffer[R::PACKET_BYTE_COUNT .. R::PACKET_BYTE_COUNT * 2];
+		assert_eq!(get_packet_id::<R>(packet), 2.into());
 		assert_eq!(packet::get_parcel_segment(packet), PAYLOAD_DATA);
 
-		let packet = &packet_buffer[A::PACKET_BYTE_COUNT * 2 ..];
-		assert_eq!(get_packet_id::<A>(packet), 3.into());
+		let packet = &packet_buffer[R::PACKET_BYTE_COUNT * 2 ..];
+		assert_eq!(get_packet_id::<R>(packet), 3.into());
 		assert_eq!(packet::get_parcel_segment(packet), PAYLOAD_DATA);
 	}
 
-	/// Test that an endpoint is able to accept another endpoint's GNet requests.
-	pub fn generic_accept_test<S: Transmit + Listen, C: Transmit>(
-		(server, server_addr): (S, SocketAddr),
-		(client, client_addr): (C, SocketAddr),
+	/// Test that provided server endpoint implementation is able to listen for incoming GNet packets
+	/// from provided client endpoint implementation.
+	pub fn test_listen<S: Transmit + Listen, C: Transmit>(
+		(server, server_addr): (&S, SocketAddr),
+		(client, client_addr): (&C, SocketAddr),
 	) {
 		assert_eq!(S::PACKET_BYTE_COUNT, C::PACKET_BYTE_COUNT);
 		assert_eq!(S::RESERVED_BYTE_COUNT, C::RESERVED_BYTE_COUNT);
+		const HANDSHAKE_ID: DataPrelude = [ 1, 3, 3, 7, ];
 		const REQUEST_DATA: &[u8] = b"GNET REQUEST";
-		const ACCEPT_DATA: &[u8] = b"GNET ACCEPT";
 		const PAYLOAD_DATA: &[u8] = b"GNET PAYLOAD DATA";
 
-		let mut packet_header = packet::PacketHeader::request_connection(4);
+		let mut packet_header = packet::PacketHeader::request_connection(HANDSHAKE_ID, 4);
 		let mut packet_buffer = vec![0; S::PACKET_BYTE_COUNT];
 		
 		packet_header.signal.set_parcel_byte_count(REQUEST_DATA.len() as u16);
 		packet::write_header(&mut packet_buffer[S::RESERVED_BYTE_COUNT ..], packet_header);
 		packet::write_data(&mut packet_buffer[S::RESERVED_BYTE_COUNT ..], REQUEST_DATA, 0);
 
-		assert_eq!(client.send_to(&mut packet_buffer, server_addr).unwrap(), S::PACKET_BYTE_COUNT);
+		assert_eq!(
+			client.send_to(&mut packet_buffer, server_addr).expect("Failed to send requesting packet!"),
+			S::PACKET_BYTE_COUNT,
+		);
 
 		let pop_result = server.pop_connectionless_packet();
 
@@ -302,32 +272,40 @@ pub mod test {
 			panic!("No packet was popped!");
 		}
 
-		packet_header.connection_id = 1;
-		packet_header.packet_id = 1.into();
-		server.allow_connection_id(1);
+		let connection_id = 1;
 
-		packet_header.signal.set_parcel_byte_count(ACCEPT_DATA.len() as u16);
+		packet_header = packet::PacketHeader::accept_connection(HANDSHAKE_ID, size_of::<ConnectionId>() as u16);
 		packet::write_header(&mut packet_buffer[S::RESERVED_BYTE_COUNT ..], packet_header);
-		packet::write_data(&mut packet_buffer[S::RESERVED_BYTE_COUNT ..], ACCEPT_DATA, 0);
+		server.allow_connection_id(connection_id);
 
-		assert_eq!(server.send_to(&mut packet_buffer, client_addr).unwrap(), S::PACKET_BYTE_COUNT);
+		let data_segment = packet::get_mut_data_segment(&mut packet_buffer[S::RESERVED_BYTE_COUNT ..]);
+		connection_id.to_bytes(data_segment);
 
-		assert_eq!(client.recv_all(&mut packet_buffer, 0).unwrap(), S::PACKET_BYTE_COUNT);
 		assert_eq!(
-			packet::get_parcel_segment(&packet_buffer[S::PACKET_BYTE_COUNT + S::RESERVED_BYTE_COUNT ..]),
-			ACCEPT_DATA,
+			server.send_to(&mut packet_buffer, client_addr).expect("Failed to send accept packet!"),
+			S::PACKET_BYTE_COUNT,
 		);
 
+		assert_eq!(client.recv_all(&mut packet_buffer, 0), Ok(C::PACKET_BYTE_COUNT));
+		let packet = &packet_buffer[C::PACKET_BYTE_COUNT + C::RESERVED_BYTE_COUNT ..];
+		assert_eq!(*packet::get_header(packet), packet_header);
+		let (received_connection_id, _) = ConnectionId::from_bytes(packet::get_parcel_segment(packet))
+			.expect("Failed to deserialize ConnectionId!");
+		assert_eq!(received_connection_id, connection_id);
 
+		packet_header.connection_id = connection_id;
 		packet_header.packet_id = packet_header.packet_id.next();
-		packet_header.signal.set_parcel_byte_count(PAYLOAD_DATA.len() as u16);
-		packet::write_header(&mut packet_buffer[S::RESERVED_BYTE_COUNT ..], packet_header);
-		packet::write_data(&mut packet_buffer[S::RESERVED_BYTE_COUNT ..], PAYLOAD_DATA, 0);
+		packet_header.signal = packet::SignalBits::volatile(PAYLOAD_DATA.len() as u16);
+		packet::write_header(&mut packet_buffer[C::RESERVED_BYTE_COUNT ..], packet_header);
+		packet::write_data(&mut packet_buffer[C::RESERVED_BYTE_COUNT ..], PAYLOAD_DATA, 0);
 
-		let send_result = client.send_to(&mut packet_buffer[.. S::PACKET_BYTE_COUNT], server_addr);
-		assert_eq!(send_result.unwrap(), S::PACKET_BYTE_COUNT);
+		assert_eq!(
+			client.send_to(&mut packet_buffer[.. C::PACKET_BYTE_COUNT], server_addr)
+				.expect("Failed to send payload packet!"),
+			C::PACKET_BYTE_COUNT,
+		);
 
-		assert_eq!(server.recv_all(&mut packet_buffer, 1).unwrap(), S::PACKET_BYTE_COUNT);
+		assert_eq!(server.recv_all(&mut packet_buffer, connection_id), Ok(S::PACKET_BYTE_COUNT));
 		assert_eq!(
 			packet::get_parcel_segment(&packet_buffer[S::PACKET_BYTE_COUNT * 2 ..]),
 			PAYLOAD_DATA,
