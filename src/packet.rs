@@ -264,66 +264,6 @@ pub struct PacketHeader {
 	pub prelude: DataPrelude,
 }
 
-impl PartialOrd for PacketIndex {
-	#[inline]
-	fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-		Some(self.cmp(other))
-	}
-}
-
-impl Ord for PacketIndex {
-	#[inline]
-	fn cmp(&self, other: &Self) -> Ordering {
-		match self.0 - other.0 {
-			Wrapping(0) => Ordering::Equal,
-			x if x.0 < std::u8::MAX / 2 => Ordering::Greater,
-			_ => Ordering::Less,
-		}
-	}
-}
-
-impl From<u8> for PacketIndex {
-	#[inline]
-	fn from(item: u8) -> Self {
-		Self(Wrapping(item))
-	}
-}
-
-impl PacketIndex {
-	/// Get the next index.
-	#[inline]
-	pub fn next(self) -> Self {
-		Self(self.0 + Wrapping(1))
-	}
-
-	/// Get the number of indices between to and from (to - from).
-	#[inline]
-	pub fn distance(to: Self, from: Self) -> u8 {
-		(to.0 - from.0).0
-	}
-}
-
-impl PartialOrd for PacketHeader {
-	#[inline]
-	fn partial_cmp(&self, rhs: &Self) -> Option<Ordering> {
-		self.packet_id.partial_cmp(&rhs.packet_id)
-	}
-}
-
-impl Ord for PacketHeader {
-	#[inline]
-	fn cmp(&self, rhs: &Self) -> Ordering {
-		self.packet_id.cmp(&rhs.packet_id)
-	}
-}
-
-impl PartialEq for PacketHeader {
-	#[inline]
-	fn eq(&self, rhs: &Self) -> bool {
-		self.packet_id == rhs.packet_id
-	}
-}
-
 impl PacketHeader {
 	#[inline]
 	fn zero() -> Self {
@@ -334,6 +274,15 @@ impl PacketHeader {
 			ack_packet_id: 0.into(),
 			ack_packet_mask: 0,
 			prelude: [0; 4],
+		}
+	}
+
+	/// Create a packet header associated with a volatile packet.
+	#[inline]
+	pub fn volatile(parcel_byte_count: u16) -> Self {
+		Self {
+			signal: SignalBits::volatile(parcel_byte_count),
+			.. Self::zero()
 		}
 	}
 
@@ -409,6 +358,66 @@ impl PacketHeader {
 	#[inline]
 	pub fn get_payload_byte_count(&self) -> u16 {
 		self.signal.get_parcel_byte_count() + self.signal.get_stream_byte_count()
+	}
+}
+
+impl PartialOrd for PacketIndex {
+	#[inline]
+	fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+		Some(self.cmp(other))
+	}
+}
+
+impl Ord for PacketIndex {
+	#[inline]
+	fn cmp(&self, other: &Self) -> Ordering {
+		match self.0 - other.0 {
+			Wrapping(0) => Ordering::Equal,
+			x if x.0 < std::u8::MAX / 2 => Ordering::Greater,
+			_ => Ordering::Less,
+		}
+	}
+}
+
+impl From<u8> for PacketIndex {
+	#[inline]
+	fn from(item: u8) -> Self {
+		Self(Wrapping(item))
+	}
+}
+
+impl PacketIndex {
+	/// Get the next index.
+	#[inline]
+	pub fn next(self) -> Self {
+		Self(self.0 + Wrapping(1))
+	}
+
+	/// Get the number of indices between to and from (to - from).
+	#[inline]
+	pub fn distance(to: Self, from: Self) -> u8 {
+		(to.0 - from.0).0
+	}
+}
+
+impl PartialOrd for PacketHeader {
+	#[inline]
+	fn partial_cmp(&self, rhs: &Self) -> Option<Ordering> {
+		self.packet_id.partial_cmp(&rhs.packet_id)
+	}
+}
+
+impl Ord for PacketHeader {
+	#[inline]
+	fn cmp(&self, rhs: &Self) -> Ordering {
+		self.packet_id.cmp(&rhs.packet_id)
+	}
+}
+
+impl PartialEq for PacketHeader {
+	#[inline]
+	fn eq(&self, rhs: &Self) -> bool {
+		self.packet_id == rhs.packet_id
 	}
 }
 
@@ -488,7 +497,9 @@ pub fn read_connection_id(packet: &[u8]) -> ConnectionId {
 /// Check whether the provided packet is a valid GNet packet.
 #[inline]
 pub fn is_valid(packet: &[u8]) -> bool {
-	debug_assert!(packet.len() >= size_of::<PacketHeader>());
+	if packet.len() < size_of::<PacketHeader>() {
+		return false
+	}
 	let &header = get_header(packet);
 	header.is_valid()
 		&& header.get_payload_byte_count() <= (packet.len() - size_of::<PacketHeader>()) as u16
@@ -497,7 +508,9 @@ pub fn is_valid(packet: &[u8]) -> bool {
 /// Check whether the provided packet is a valid GNet packet associated with a connection.
 #[inline]
 pub fn is_valid_connected(packet: &[u8]) -> bool {
-	debug_assert!(packet.len() >= size_of::<PacketHeader>());
+	if packet.len() < size_of::<PacketHeader>() {
+		return false
+	}
 	let &header = get_header(packet);
 	header.is_valid_connected()
 		&& header.get_payload_byte_count() <= (packet.len() - size_of::<PacketHeader>()) as u16
@@ -506,7 +519,9 @@ pub fn is_valid_connected(packet: &[u8]) -> bool {
 /// Check whether the provided packet is a valid connectionless GNet packet.
 #[inline]
 pub fn is_valid_connectionless(packet: &[u8]) -> bool {
-	debug_assert!(packet.len() >= size_of::<PacketHeader>());
+	if packet.len() < size_of::<PacketHeader>() {
+		return false
+	}
 	let &header = get_header(packet);
 	header.is_valid_connectionless()
 		&& header.signal.get_parcel_byte_count() <= (packet.len() - size_of::<PacketHeader>()) as u16

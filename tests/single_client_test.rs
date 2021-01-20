@@ -1,9 +1,10 @@
-use std::sync::Arc;
-use std::net::SocketAddr;
+
 use gnet::{Connection, ConnectionListener, Parcel};
 use gnet::byte::ByteSerialize;
 use gnet::endpoint::Open;
-use gnet::endpoint::basic::{ClientEndpoint, ServerEndpoint};
+use gnet::endpoint::basic::{Transmitter, Demultiplexer};
+
+use std::net::SocketAddr;
 
 #[derive(Debug, PartialEq, Clone)]
 enum TestParcel {
@@ -63,21 +64,21 @@ fn single_client_test() {
 	let listener_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 2100));
 	let client_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 2101));
 
-	let listener = ConnectionListener::new(
-		Arc::new(
-			ServerEndpoint::open(listener_addr)
-				.expect("Failed to open server socket!")));
+	let listener = ConnectionListener::with_transmitter_and_demultiplexer(
+		Transmitter::open(listener_addr).expect("Failed to open listening socket!"),
+		Demultiplexer::default(),
+	);
 	let client_connection = Connection::connect(
-		ClientEndpoint::open(client_addr).expect("Failed to open client socket!"),
+		Transmitter::open(client_addr).expect("Failed to open client socket!"),
 		listener_addr,
 		REQUEST_PAYLOAD.to_vec(),
 	).expect("Failed to begin establishing a connection from the client!");
 
 	let accept_result = listener.try_accept(|addr, payload| {
 		if addr == client_addr && payload == REQUEST_PAYLOAD {
-			gnet::listener::AcceptDecision::Allow
+			gnet::listen::AcceptDecision::Allow
 		} else {
-			gnet::listener::AcceptDecision::Ignore
+			gnet::listen::AcceptDecision::Ignore
 		}
 	});
 

@@ -13,6 +13,7 @@ pub struct OutOfIdsError();
 
 /// Manager for [`ConnectionIds`](ConnectionId). Responsible for making sure
 /// there are no [`Connections`](super::connection::Connection) that share ids.
+#[derive(Debug)]
 pub struct Allocator {
 	/// Largest ConnectionId in use.
 	last_id: ConnectionId,

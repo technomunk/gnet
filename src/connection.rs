@@ -7,13 +7,14 @@ pub use error::{ConnectError, ConnectionError, PendingConnectionError};
 use crate::byte::{ByteSerialize, SerializationError};
 use crate::id::ConnectionId;
 
-use super::endpoint::{Listen, Transmit, TransmitError};
+use super::endpoint::{Demux, Transmit, TransmitError};
 use super::packet;
 use super::packet::PacketHeader;
 use super::Parcel;
 
 use rand::random;
 
+use std::mem::size_of;
 use std::iter::repeat;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
@@ -80,7 +81,7 @@ impl<T: Transmit, P: Parcel> Connection<T, P> {
 			endpoint,
 			connection_id,
 			remote,
-			packet_buffer: Vec::with_capacity(T::PACKET_BYTE_COUNT),
+			packet_buffer: Vec::with_capacity(T::MAX_FRAME_LENGTH),
 			status: ConnectionStatus::Open,
 			last_sent_packet_time: now,
 			last_received_packet_time: now,
@@ -94,25 +95,22 @@ impl<T: Transmit, P: Parcel> Connection<T, P> {
 	}
 }
 
-impl<T: Transmit, P: Parcel> Connection<T, P> {
-	const PAYLOAD_BYTE_COUNT: usize =
-		T::PACKET_BYTE_COUNT
-		- std::mem::size_of::<PacketHeader>()
-		- T::RESERVED_BYTE_COUNT;
+impl<E: Transmit, P: Parcel> Connection<E, P> {
+	const MAX_PAYLOAD_LENGTH: usize = E::MAX_FRAME_LENGTH - size_of::<packet::PacketHeader>();
 
 	/// Attempt to establish a new connection to provided remote address from provided local one.
 	#[inline]
 	pub fn connect(
-		endpoint: T,
+		endpoint: E,
 		remote: SocketAddr,
 		payload: Vec<u8>,
-	) -> Result<PendingConnection<T, P>, ConnectError> {
-		if payload.len() > Self::PAYLOAD_BYTE_COUNT {
+	) -> Result<PendingConnection<E, P>, ConnectError> {
+		if payload.len() > Self::MAX_PAYLOAD_LENGTH {
 			Err(ConnectError::PayloadTooLarge)
 		} else {
 			let handshake_id = random::<u32>().to_ne_bytes();
-			let mut packet_buffer = Vec::with_capacity(T::PACKET_BYTE_COUNT);
-			packet_buffer.resize_with(T::PACKET_BYTE_COUNT, Default::default);
+			let mut packet_buffer = Vec::with_capacity(E::MAX_FRAME_LENGTH);
+			packet_buffer.resize_with(payload.len() + size_of::<packet::PacketHeader>(), Default::default);
 			packet::write_header(
 				&mut packet_buffer,
 				PacketHeader::request_connection(handshake_id, payload.len() as u16),
@@ -153,10 +151,27 @@ impl<T: Transmit, P: Parcel> Connection<T, P> {
 
 	/// Get the next parcel from the connection.
 	///
-	/// Includes the data prelude from the network packet the parcel was transmitted with.
+	/// Includes the data prelude from the network packet the parcel was transmitted with. Will query
+	/// the socket, pop any pending network packets and finally pop a parcel.
 	///
-	/// Will query the socket, pop any pending network packets and finally pop a parcel.
+	/// # Note
+	/// Prefer using [`pop_mux_parcel`](Connection::pop_mux_parcel) if possible, as it allows multiple
+	/// connections to share the same endpoint.
 	pub fn pop_parcel(&mut self) -> Result<(P, [u8; 4]), ConnectionError> {
+		todo!()
+	}
+
+	/// Get the next parcel from the connection.
+	///
+	/// Includes the data prelude from the network packet the parcel was transmitted with. Will query
+	/// the socket, pop any pending network packets and finally pop a parcel.
+	///
+	/// # Note
+	/// Behaves similarly to [`pop_parcel`](Connection::pop_parcel), except demultiplexes read packets
+	/// allowing multiple connection to share the same endpoint.
+	pub fn pop_mux_parcel(&mut self) -> Result<(P, [u8; 4]), ConnectError> where
+		E: Demux,
+	{
 		todo!()
 	}
 
@@ -231,7 +246,30 @@ impl<T: Transmit, P: Parcel> Connection<T, P> {
 	///
 	/// # Notes
 	/// - Will not read past the end of the provided buffer.
+	/// - Prefer using [`read_from_mux_stream`](Connection::read_from_mux_stream), which demultiplexes
+	/// incoming packets, allowing multiple connections to share the same endpoint.
 	pub fn read_from_stream(&mut self, buffer: &mut [u8]) -> Result<usize, ConnectionError> {
+		todo!()
+	}
+
+	/// Attempt to read data from the connection stream into the provided buffer.
+	///
+	/// # Returns
+	/// Number of bytes read.
+	///
+	/// # Streams
+	/// Connection streams offer
+	/// [TCP](https://en.wikipedia.org/wiki/Transmission_Control_Protocol)-like functionality
+	/// for contiguous streams of data. Streams are transmitted with the same network packets
+	/// as reliable parcels, reducing overall data duplication for lost packets.
+	///
+	/// # Notes
+	/// - Will not read past the end of the provided buffer.
+	/// - Behaves similarly to [`read_from_stream`](Connection::read_from_stream) except this also
+	/// demultiplexes incoming packets, allowing multiple connections to share the same endpoint.
+	pub fn read_from_mux_stream(&mut self, buffer: &mut [u8]) -> Result<usize, ConnectionError> where
+		E: Demux,
+	{
 		todo!()
 	}
 
@@ -244,8 +282,8 @@ impl<T: Transmit, P: Parcel> Connection<T, P> {
 	/// as reliable parcels, reducing overall data duplication for lost packets.
 	///
 	/// # Notes
-	/// - Does not do synchronization that [`read_from_stream()`](Self::read_from_stream)
-	/// performs, as a result there may be more bytes ready to be read than returned.
+	/// - Does not do synchronization that [`read_from_stream()`](Self::read_from_stream) performs,
+	/// as a result there may be more bytes ready to be read than returned.
 	pub fn pending_incoming_stream_bytes(&self) -> Result<usize, ConnectionError> {
 		todo!()
 	}
@@ -288,12 +326,6 @@ impl<T: Transmit, P: Parcel> PendingConnection<T, P> {
 	/// Receives any pending network packets, promoting the connection to a full
 	/// [`Connection`](Connection) if valid GNet packets were received.
 	pub fn try_promote(mut self) -> Result<Connection<T, P>, PendingConnectionError<T, P>> {
-		if let Err(error) = self.endpoint.recv_all(&mut self.packet_buffer, 0) {
-			match error {
-				TransmitError::Io(error) => return Err(PendingConnectionError::Io(error)),
-				TransmitError::NoPendingPackets => (),
-			}
-		};
 		todo!()
 	}
 
@@ -308,29 +340,6 @@ impl<T: Transmit, P: Parcel> PendingConnection<T, P> {
 	/// - Reads any pending network packets, filtering them.
 	/// - If no packets have been received for half a timeout window re-sends the request.
 	pub fn sync(&mut self) -> Result<(), PendingConnectionError<T, P>> {
-		match self.endpoint.recv_all(&mut self.packet_buffer, 0) {
-			Err(TransmitError::Io(error)) => return Err(PendingConnectionError::Io(error)),
-			Err(TransmitError::NoPendingPackets) => (),
-			Ok(_) => self.last_communication_time = Instant::now(),
-		};
-		if Instant::now().duration_since(self.last_communication_time) > RESYNC_PERIOD {
-			// Send another request
-			let original_len = self.packet_buffer.len();
-			self.packet_buffer.extend(repeat(0).take(T::PACKET_BYTE_COUNT));
-			let work_slice = &mut self.packet_buffer[original_len ..];
-			packet::write_header(
-				work_slice,
-				PacketHeader::request_connection(self.handshake_id, self.payload.len() as u16),
-			);
-			if !self.payload.is_empty() {
-				packet::write_data(work_slice, &self.payload, 0);
-			}
-			self.endpoint.send_to(work_slice, self.remote)?;
-			self.packet_buffer.truncate(original_len);
-			let communication_time = Instant::now();
-			self.last_communication_time = communication_time;
-			self.last_sent_packet_time = communication_time;
-		};
-		Ok(())
+		todo!()
 	}
 }

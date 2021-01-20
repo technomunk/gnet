@@ -8,11 +8,11 @@ pub mod byte;
 pub mod connection;
 pub mod endpoint;
 pub mod id;
-pub mod listener;
+pub mod listen;
 pub mod packet;
 
 pub use connection::{Connection, ConnectionError, PendingConnection, PendingConnectionError};
-pub use listener::{AcceptError, ConnectionListener};
+pub use listen::{AcceptError, ConnectionListener};
 
 use crate::byte::ByteSerialize;
 
