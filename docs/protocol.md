@@ -18,8 +18,10 @@ as hardware implementations).
 
 ## Terminology
 
-- **Packet** - collection of bytes sent across network. Fixed size for a particular application,
-however the exact size is application defined.
+- **Address** - a unique identifier of an **endpoint** on the network.
+- **Datagram** - sequence of bytes sent across network. Has an associated source and destination
+addresses.
+- **Packet** - a datagram that includes a GNet header.
 - **Package** - an application defined data type that can be serialized and deserialized into a
 small number of bytes (smaller than **packet** size) that is used to transmit application data with
 reduced delay.
@@ -35,7 +37,6 @@ A typical use-case has multiple clients and a single **server**, however in a
 - **Server** - an **endpoint** that listens for incoming **connections** from potential **clients**.
 - **Listener** - a specialized **endpoint** for **servers** that can receive incoming requests for
 connections and either *accept*, *deny* or *ignore* them.
-- **Address** - a unique identifier of an **endpoint** on the network.
 
 ## Protocol
 

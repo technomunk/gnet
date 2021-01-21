@@ -1,4 +1,4 @@
-use crate::Parcel;
+use crate::protocol::Parcel;
 use crate::byte::SerializationError;
 use crate::endpoint::Transmit;
 

@@ -7,9 +7,9 @@ mod error;
 pub use error::{ConnectError, ConnectionError, PendingConnectionError};
 
 use crate::byte::{ByteSerialize, SerializationError};
-use crate::id::ConnectionId;
+use crate::endpoint::{Demux, Transmit, TransmitError};
 
-use super::endpoint::{Demux, Transmit, TransmitError};
+use super::id::ConnectionId;
 use super::packet;
 use super::packet::PacketHeader;
 use super::Parcel;

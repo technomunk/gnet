@@ -1,10 +1,7 @@
 //! Generic testing functions for [`Transmit`](Transmit) implementations.
 
-use crate::packet;
-
 use super::Transmit;
 
-use std::mem::size_of;
 use std::cmp::max;
 use std::net::SocketAddr;
 
@@ -19,9 +16,7 @@ pub fn generic_transmit_test<S: Transmit, R: Transmit>(
 	(sender, sender_addr): (&S, SocketAddr),
 	(receiver, receiver_addr): (&R, SocketAddr),
 ) {
-	let max_datagram_length =
-		DATAGRAMS.iter().fold(0, |acc, x| max(acc, x.len()))
-		+ size_of::<packet::PacketHeader>();
+	let max_datagram_length = DATAGRAMS.iter().fold(0, |acc, x| max(acc, x.len()));
 
 	assert!(S::MAX_FRAME_LENGTH >= max_datagram_length);
 	assert!(S::MAX_FRAME_LENGTH >= max_datagram_length);
@@ -49,8 +44,4 @@ pub fn generic_transmit_test<S: Transmit, R: Transmit>(
 		assert_eq!(receiver.try_recv_from(&mut buffer), Ok((DATAGRAMS[0].len(), sender_addr)));
 		assert_eq!(&buffer[.. DATAGRAMS[0].len()], DATAGRAMS[0]);
 	}
-
-	let packet_header = packet::PacketHeader::volatile(DATAGRAMS[2].len() as u16);
-	packet::write_header(&mut buffer, packet_header);
-	packet::write_data(&mut buffer, DATAGRAMS[2], 0);
 }

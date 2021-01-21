@@ -5,8 +5,6 @@
 #[cfg(test)]
 pub mod test;
 
-pub use crate::id::ConnectionId;
-
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::net::SocketAddr;

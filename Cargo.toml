@@ -16,10 +16,8 @@ documentation = "https://docs.rs/gnet"
 [dependencies]
 rand = "0.8.2"
 
-[dev-dependencies]
-hashers = "1.0.1"
-
 [features]
-adv-endpoints = []
+default = ["protocol"]
 
-default = []
+protocol = []
+adv-endpoints = []

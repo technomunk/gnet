@@ -1,6 +1,6 @@
 //! Data structures used for processing connection requests.
 
-use crate::id::OutOfIdsError;
+use crate::protocol::id::OutOfIdsError;
 
 use super::TransmitError;
 

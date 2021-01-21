@@ -10,11 +10,12 @@ mod accept;
 
 pub use accept::*;
 
-use crate::connection::{Connection, ConnectionStatus,};
 use crate::endpoint::{Demux, Transmit, TransmitError, Open,};
-use crate::id::{ConnectionId, Allocator as ConnectionIdAllocator,};
-use crate::packet;
-use crate::Parcel;
+
+use super::connection::{Connection, ConnectionStatus,};
+use super::id::{ConnectionId, Allocator as ConnectionIdAllocator,};
+use super::packet;
+use super::Parcel;
 
 use std::io::Error as IoError;
 use std::marker::PhantomData;

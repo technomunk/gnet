@@ -1,5 +1,4 @@
-
-use gnet::{Connection, ConnectionListener, Parcel};
+use gnet::prelude::*;
 use gnet::byte::ByteSerialize;
 use std::collections::HashMap;
 use std::net::{SocketAddr, UdpSocket};
@@ -51,7 +50,7 @@ impl ByteSerialize for TestParcel {
 	}
 }
 
-impl Parcel for TestParcel {}
+impl gnet::protocol::Parcel for TestParcel {}
 
 #[test]
 fn single_client_test() {
@@ -74,9 +73,9 @@ fn single_client_test() {
 
 	let accept_result = listener.try_accept(|addr, payload| {
 		if addr == client_addr && payload == REQUEST_PAYLOAD {
-			gnet::listen::AcceptDecision::Allow
+			gnet::protocol::listen::AcceptDecision::Allow
 		} else {
-			gnet::listen::AcceptDecision::Ignore
+			gnet::protocol::listen::AcceptDecision::Ignore
 		}
 	});
 
