@@ -1,48 +1,77 @@
 //! [`Demux`](Demux) trait definition, implementation and test.
 
-#[cfg(feature = "basic-endpoints")]
-pub mod basic;
+// #[cfg(feature = "basic-endpoints")]
+// pub mod basic;
 #[cfg(test)]
 pub mod test;
 
 pub use crate::id::ConnectionId;
 
-use super::Transmit;
-
+use std::collections::HashMap;
+use std::hash::Hash;
 use std::net::SocketAddr;
-use std::sync::Mutex;
 
 /// A trait for connection demultiplexers.
 ///
 /// Demultiplexers allow multiple connections to use the same endpoint simultaneously by
 /// inspecting arriving datagrams and buffering any that belong to allowed connections for
 /// later use.
-pub trait Demux {
-	/// Allow buffering datagrams associated with provided connection.
-	fn allow(&mut self, connection: ConnectionId);
-	/// Block (disallow) buffering datagrams associated with provided connection.
+pub trait Demux<K> {
+	/// Allow buffering datagrams associated with provided key.
+	fn allow(&mut self, key: K);
+	/// Block (disallow) buffering datagrams associated with provided key.
 	///
 	/// # Note
-	/// Any non-popped datagrams associated with newly blocked connection should be dropped.
-	fn block(&mut self, connection: ConnectionId);
-	/// Check whether buffering datagrams associated with provided connection is currently allowed.
-	fn is_allowed(&self, connection: ConnectionId) -> bool;
+	/// Any datagrams already associated with the newly blocked key should be dropped.
+	fn block(&mut self, key: K);
+	/// Check whether buffering datagrams associated with provided key is currently allowed.
+	fn is_allowed(&self, key: K) -> bool;
 
-	/// Buffer a datagram associated with provided connection.
+	/// Buffer a datagram associated with provided key.
 	///
 	/// # Notes
 	/// - The length and source address of the datagram should be recorded as it needs
 	/// to be returned with [`pop`](Mux::pop).
 	/// - The connection may be assumed to be allowed at the time of invocation.
-	fn push(&mut self, connection: ConnectionId, addr: SocketAddr, datagram: &[u8]);
-	/// Remove a buffered datagram associated with provided connection if any were buffered.
+	/// - The implementation may assume the key is allowed at the time of invocation.
+	fn push(&mut self, key: K, dgram: (&[u8], SocketAddr));
+
+	/// Process buffered datagrams associated with provided key by invoking the provided functor.
 	///
-	/// The datagram should be written to provided buffer and the function should return the length
-	/// of the popped datagram or `None`.
-	/// 
 	/// # Notes
-	/// - The datagram order does not need to be preserved, meaning popped datagrams may come
-	/// in a different order to push().
-	/// - The connection may be assumed to be allowed at the time of invocation.
-	fn pop(&mut self, connection: ConnectionId, buffer: &mut [u8]) -> Option<(usize, SocketAddr)>;
+	/// - The functor should be invoked exactly once for each buffered datagram.
+	/// - The order of invocations is up to the implementation.
+	/// - The implementation may assume the key is allowed at the time of invocation.
+	fn process<F: FnMut((&[u8], SocketAddr))>(&mut self, key: K, functor: F);
+}
+
+impl<K: Hash + Eq> Demux<K> for HashMap<K, (Vec<u8>, Vec<(usize, SocketAddr)>)> {
+	#[inline]
+	fn allow(&mut self, key: K) {
+		self.entry(key).or_insert_with(Default::default);
+	}
+	#[inline]
+	fn block(&mut self, key: K) {
+		self.remove(&key);
+	}
+	#[inline]
+	fn is_allowed(&self, key: K) -> bool {
+		self.contains_key(&key)
+	}
+
+	fn push(&mut self, key: K, dgram: (&[u8], SocketAddr)) {
+		let (bytes, infos) = self.get_mut(&key).unwrap();
+		bytes.extend_from_slice(dgram.0);
+		infos.push((dgram.0.len(), dgram.1));
+	}
+	fn process<F: FnMut((&[u8], SocketAddr))>(&mut self, key: K, mut functor: F) {
+		let (bytes, infos) = self.get_mut(&key).unwrap();
+		let mut offset = 0;
+		for (len, src) in infos.iter() {
+			functor((&bytes[offset .. offset + *len], *src));
+			offset += *len;
+		}
+		infos.clear();
+		bytes.clear();
+	}
 }

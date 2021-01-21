@@ -1,12 +1,8 @@
 //! [`Transmit`](Transmit) trait definition, implementation and unit test.
 
-#[cfg(feature = "basic-endpoints")]
-pub mod basic;
+mod basic;
 #[cfg(test)]
 pub mod test;
-
-use crate::id::ConnectionId;
-use crate::packet;
 
 use std::io::{Error as IoError, ErrorKind as IoErrorKind};
 use std::net::SocketAddr;
@@ -44,8 +40,8 @@ pub trait Transmit {
 
 	/// Send provided data to the provided address.
 	///
-	/// Return the number of bytes sent, which must be at least the length of `data`.
-	/// Or the error responsible for the failure.
+	/// Return the number of bytes sent, which must be at least the length of `data`. Or the error
+	/// responsible for the failure.
 	///
 	/// # Note
 	/// Implementation may assume data is at most [`MAX_FRAME_LENGTH`](MAX_FRAME_LENGTH) bytes.
@@ -54,26 +50,10 @@ pub trait Transmit {
 	/// Attempt to recover an incoming datagram.
 	///
 	/// Return the number of bytes written to the buffer and the origin of the datagram on success.
-	/// Should have non-blocking behavior, meaning if there are no packets ready for reading
-	/// immediately the function should return
-	/// [`TransmitError::NoPendingPackets`](TransmitError::NoPendingPackets).
 	///
 	/// # Note
 	/// - May assume the buffer is able to hold [`MAX_FRAME_LENGTH`](MAX_FRAME_LENGTH) bytes.
 	fn try_recv_from(&self, buffer: &mut [u8]) -> Result<(usize, SocketAddr), TransmitError>;
-}
-
-/// Attempt to receive and validate a single datagram using provided transmitter.
-pub(crate) fn try_recv_filtered_from<T: Transmit>(
-	transmitter: &T,
-	buffer: &mut [u8],
-) -> Result<(usize, SocketAddr), TransmitError> {
-	let (length, addr) = transmitter.try_recv_from(buffer)?;
-	if packet::is_valid(&buffer[.. length]) {
-		Ok((length, addr))
-	} else {
-		Err(TransmitError::MalformedPacket)
-	}
 }
 
 impl From<IoError> for TransmitError {
@@ -94,7 +74,8 @@ impl PartialEq for TransmitError {
 			} else {
 				false
 			},
-			other => matches!(other, rhs),
+			Self::MalformedPacket => matches!(rhs, Self::MalformedPacket),
+			Self::NoPendingPackets => matches!(rhs, Self::NoPendingPackets),
 		}
 	}
 }

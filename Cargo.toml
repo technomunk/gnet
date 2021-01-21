@@ -20,6 +20,6 @@ rand = "0.8.2"
 hashers = "1.0.1"
 
 [features]
-basic-endpoints = []
+adv-endpoints = []
 
-default = ["basic-endpoints"]
+default = []

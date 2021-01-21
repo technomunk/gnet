@@ -2,6 +2,8 @@
 //!
 //! 
 
+#![cfg_attr(debug_assertions, allow(dead_code, unused_imports, unused_variables))]
+
 mod accept;
 // #[cfg(test)]
 // pub mod test;
@@ -26,7 +28,7 @@ use std::sync::{Arc, Mutex,};
 /// decide whether to accept a particular new connection.
 #[derive(Debug)]
 pub struct ConnectionListener<E, P> where
-	E: Transmit + Demux,
+	E: Transmit + Demux<ConnectionId>,
 	P: Parcel,
 {
 	endpoint: Arc<Mutex<E>>,
@@ -35,7 +37,7 @@ pub struct ConnectionListener<E, P> where
 }
 
 impl<E, P> ConnectionListener<E, P> where
-	E: Transmit + Demux,
+	E: Transmit + Demux<ConnectionId>,
 	P: Parcel,
 {
 	// TODO: https://github.com/rust-lang/rust/issues/8995
@@ -113,7 +115,7 @@ impl<E, P> ConnectionListener<E, P> where
 
 impl<T, D, P> ConnectionListener<(T, D), P> where
 	T: Transmit,
-	D: Demux,
+	D: Demux<ConnectionId>,
 	P: Parcel,
 {
 	/// Create a new `ConnectionListener` using provided [transmitter](Transmit) and default

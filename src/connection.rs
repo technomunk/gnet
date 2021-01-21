@@ -1,5 +1,7 @@
 //! Definitions of connection-related structs. This is the primary export of the library.
 
+#![cfg_attr(debug_assertions, allow(dead_code, unused_imports, unused_variables))]
+
 mod error;
 
 pub use error::{ConnectError, ConnectionError, PendingConnectionError};
@@ -118,7 +120,7 @@ impl<E: Transmit, P: Parcel> Connection<E, P> {
 			if !payload.is_empty() {
 				packet::write_data(&mut packet_buffer, &payload, 0);
 			}
-			endpoint.send_to(&mut packet_buffer, remote)?;
+			endpoint.send_to(&packet_buffer, remote)?;
 			packet_buffer.clear();
 			let communication_time = Instant::now();
 			Ok(PendingConnection {
@@ -170,7 +172,7 @@ impl<E: Transmit, P: Parcel> Connection<E, P> {
 	/// Behaves similarly to [`pop_parcel`](Connection::pop_parcel), except demultiplexes read packets
 	/// allowing multiple connection to share the same endpoint.
 	pub fn pop_mux_parcel(&mut self) -> Result<(P, [u8; 4]), ConnectError> where
-		E: Demux,
+		E: Demux<ConnectionId>,
 	{
 		todo!()
 	}
@@ -268,7 +270,7 @@ impl<E: Transmit, P: Parcel> Connection<E, P> {
 	/// - Behaves similarly to [`read_from_stream`](Connection::read_from_stream) except this also
 	/// demultiplexes incoming packets, allowing multiple connections to share the same endpoint.
 	pub fn read_from_mux_stream(&mut self, buffer: &mut [u8]) -> Result<usize, ConnectionError> where
-		E: Demux,
+		E: Demux<ConnectionId>,
 	{
 		todo!()
 	}
@@ -325,7 +327,7 @@ impl<T: Transmit, P: Parcel> PendingConnection<T, P> {
 	///
 	/// Receives any pending network packets, promoting the connection to a full
 	/// [`Connection`](Connection) if valid GNet packets were received.
-	pub fn try_promote(mut self) -> Result<Connection<T, P>, PendingConnectionError<T, P>> {
+	pub fn try_promote(self) -> Result<Connection<T, P>, PendingConnectionError<T, P>> {
 		todo!()
 	}
 

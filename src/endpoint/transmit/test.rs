@@ -53,18 +53,4 @@ pub fn generic_transmit_test<S: Transmit, R: Transmit>(
 	let packet_header = packet::PacketHeader::volatile(DATAGRAMS[2].len() as u16);
 	packet::write_header(&mut buffer, packet_header);
 	packet::write_data(&mut buffer, DATAGRAMS[2], 0);
-
-	assert_eq!(
-		sender
-			.send_to(&buffer[.. S::MAX_FRAME_LENGTH], receiver_addr)
-			.expect("Failed to send third datagram!"),
-		buffer.len(),
-	);
-
-	assert_eq!(
-		super::try_recv_filtered_from(receiver, &mut buffer),
-		Ok((S::MAX_FRAME_LENGTH, sender_addr)),
-	);
-	assert_eq!(packet::get_header(&buffer), packet_header);
-	assert_eq!(packet::get_parcel_segment(&buffer), DATAGRAMS[2]);
 }

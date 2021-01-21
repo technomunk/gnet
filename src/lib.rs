@@ -2,7 +2,6 @@
 // TODO: list important traits and structs
 
 #![warn(clippy::all)]
-#![cfg_attr(debug_assertions, allow(dead_code, unused_imports, unused_variables))]
 
 pub mod byte;
 pub mod connection;

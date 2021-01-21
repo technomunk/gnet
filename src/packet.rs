@@ -15,8 +15,6 @@ use std::cmp::{Ordering, PartialOrd};
 use std::mem::size_of;
 use std::num::Wrapping;
 
-use signal::*;
-
 use super::id::ConnectionId;
 
 /// Networked data is preluded with this fixed-size user-data.

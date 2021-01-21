@@ -1,7 +1,5 @@
 //! Connection Id management.
 
-use std::num::Wrapping;
-
 /// A unique index associated with a connection.
 ///
 /// **NOTE**: `0` is a special value that means `no-connection-id`.

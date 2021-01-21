@@ -1,10 +1,8 @@
 
 use gnet::{Connection, ConnectionListener, Parcel};
 use gnet::byte::ByteSerialize;
-use gnet::endpoint::Open;
-use gnet::endpoint::basic::{Transmitter, Demultiplexer};
-
-use std::net::SocketAddr;
+use std::collections::HashMap;
+use std::net::{SocketAddr, UdpSocket};
 
 #[derive(Debug, PartialEq, Clone)]
 enum TestParcel {
@@ -65,11 +63,11 @@ fn single_client_test() {
 	let client_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 2101));
 
 	let listener = ConnectionListener::with_transmitter_and_demultiplexer(
-		Transmitter::open(listener_addr).expect("Failed to open listening socket!"),
-		Demultiplexer::default(),
+		UdpSocket::bind(listener_addr).expect("Failed to open listening socket!"),
+		HashMap::new(),
 	);
 	let client_connection = Connection::connect(
-		Transmitter::open(client_addr).expect("Failed to open client socket!"),
+		UdpSocket::bind(client_addr).expect("Failed to open client socket!"),
 		listener_addr,
 		REQUEST_PAYLOAD.to_vec(),
 	).expect("Failed to begin establishing a connection from the client!");

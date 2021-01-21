@@ -58,7 +58,7 @@ impl Error for SerializationError {}
 
 impl From<std::string::FromUtf8Error> for SerializationError {
 	#[inline]
-	fn from(error: std::string::FromUtf8Error) -> Self {
+	fn from(_: std::string::FromUtf8Error) -> Self {
 		Self::UnexpectedValue
 	}
 }

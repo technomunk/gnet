@@ -9,19 +9,12 @@
 //! implementations that will be used by GNet. It is recommended to use generic [tests](test), as they
 //! test specific details that are important for correct GNet functionality.
 
-
-use crate::packet;
-use crate::id::ConnectionId;
-
 use std::borrow::{Borrow, BorrowMut};
 use std::io::Error as IoError;
 use std::net::{ToSocketAddrs, SocketAddr};
-use std::marker::PhantomData;
 
 pub mod transmit;
 pub mod demux;
-#[cfg(feature = "basic-endpoints")]
-pub mod basic;
 
 pub use transmit::*;
 pub use demux::*;
@@ -44,27 +37,27 @@ impl<T: Transmit, D> Transmit for (T, D) {
 	}
 }
 
-impl<T, D: Demux> Demux for (T, D) {
+impl<T, K, D: Demux<K>> Demux<K> for (T, D) {
 	#[inline]
-	fn allow(&mut self, connection: ConnectionId) {
-		self.1.borrow_mut().allow(connection)
+	fn allow(&mut self, key: K) {
+		self.1.borrow_mut().allow(key)
 	}
 	#[inline]
-	fn block(&mut self, connection: ConnectionId) {
-		self.1.borrow_mut().block(connection)
+	fn block(&mut self, key: K) {
+		self.1.borrow_mut().block(key)
 	}
 	#[inline]
-	fn is_allowed(&self, connection: ConnectionId) -> bool {
-		self.1.borrow().is_allowed(connection)
+	fn is_allowed(&self, key: K) -> bool {
+		self.1.borrow().is_allowed(key)
 	}
 	
 	#[inline]
-	fn push(&mut self, connection: ConnectionId, addr: SocketAddr, datagram: &[u8]) {
-		self.1.borrow_mut().push(connection, addr, datagram)
+	fn push(&mut self, key: K, dgram: (&[u8], SocketAddr)) {
+		self.1.borrow_mut().push(key, dgram)
 	}
 	#[inline]
-	fn pop(&mut self, connection: ConnectionId, buffer: &mut [u8]) -> Option<(usize, SocketAddr)> {
-		self.1.borrow_mut().pop(connection, buffer)
+	fn process<F: FnMut((&[u8], SocketAddr))>(&mut self, key: K, functor: F) {
+		self.1.borrow_mut().process(key, functor);
 	}
 }
 
@@ -72,28 +65,4 @@ impl<T: Open, D: Default> Open for (T, D) {
 	fn open<A: ToSocketAddrs>(addr: A) -> Result<Self, IoError> {
 		Ok((T::open(addr)?, D::default()))
 	}
-}
-
-/// Receive all pending packets from provided endpoint, filtering only the valid ones and
-/// demultiplexing them based on internal connection id.
-///
-/// Fails eagerly, meaning some packets may still be pending if the result ie Err(_).
-/// Returns number of successfully received packets.
-pub(crate) fn recv_filter_and_demux_all<E: Transmit + Demux>(
-	endpoint: &mut E,
-	buffer: &mut [u8],
-) -> Result<usize, TransmitError> {
-	let mut count = 0;
-	while let (length, source) = endpoint.try_recv_from(buffer)? {
-		if packet::is_valid(buffer) {
-			let packet_header = packet::get_header(buffer);
-			if endpoint.is_allowed(packet_header.connection_id) {
-				endpoint.push(packet_header.connection_id, source, &buffer[.. length]);
-			} else {
-				return Err(TransmitError::MalformedPacket)
-			}
-			count += 1;
-		}
-	};
-	Ok(count)
 }
