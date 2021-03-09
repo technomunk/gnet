@@ -12,7 +12,7 @@ pub use accept::*;
 
 use crate::endpoint::{Demux, Transmit, TransmitError, Open,};
 
-use super::connection::{Connection, ConnectionStatus,};
+use super::connection::{Connection, ConnectionStatus};
 use super::id::{ConnectionId, Allocator as ConnectionIdAllocator,};
 use super::packet;
 use super::Parcel;
@@ -28,36 +28,32 @@ use std::sync::{Arc, Mutex,};
 /// The new connections are pending, letting the application
 /// decide whether to accept a particular new connection.
 #[derive(Debug)]
-pub struct ConnectionListener<E, P> where
-	E: Transmit + Demux<ConnectionId>,
+pub struct ConnectionListener<T, P> where
+	T: Transmit,
 	P: Parcel,
 {
-	endpoint: Arc<Mutex<E>>,
-	id_allocator: Mutex<ConnectionIdAllocator>,
+	endpoint: E,
+	id_allocator: ConnectionIdAllocator,
+	packet_buffer: Vec<u8>,
+	request_packets: Vec<(usize, SocketAddr)>,
 	_message_type: PhantomData<P>,
 }
 
 impl<E, P> ConnectionListener<E, P> where
-	E: Transmit + Demux<ConnectionId>,
+	E: Transmit + Demux<ConnectionId> + Clone,
 	P: Parcel,
 {
 	// TODO: https://github.com/rust-lang/rust/issues/8995
 	// type AcceptFn = FnOnce(SocketAddr, &[u8]) -> AcceptDecision;
 
 	/// Construct a new listener using provided endpoint.
+	#[inline]
 	pub fn new(endpoint: E) -> Self {
-		Self {
-			endpoint: Arc::new(Mutex::new(endpoint)),
-			id_allocator: Default::default(),
-			_message_type: PhantomData,
-		}
-	}
-
-	/// Construct a new listener with provided wrapped endpoint.
-	pub(crate) fn with_endpoint(endpoint: Arc<Mutex<E>>) -> Self {
 		Self {
 			endpoint,
 			id_allocator: Default::default(),
+			packet_buffer: Vec::with_capacity(E::MAX_FRAME_LENGTH),
+			request_packets: Vec::new(),
 			_message_type: PhantomData,
 		}
 	}
@@ -75,33 +71,30 @@ impl<E, P> ConnectionListener<E, P> where
 	/// [`AcceptError::NoPendingConnections`](AcceptError::NoPendingConnections)
 	/// if there are no pending connections remaining.
 	pub fn try_accept<F: FnOnce(SocketAddr, &[u8]) -> AcceptDecision>(
-		&self,
+		&mut self,
 		predicate: F,
 	) -> Result<Connection<E, P>, AcceptError> {
-		todo!()
-		// match self.endpoint.pop_connectionless_packet() {
-		// 	Ok((address, packet)) => {
-		// 		if packet::is_valid_connectionless(&packet[E::RESERVED_BYTE_COUNT ..]) {
-		// 			match predicate(address, packet::get_parcel_segment(&packet[E::RESERVED_BYTE_COUNT ..])) {
-		// 				AcceptDecision::Allow => {
-		// 					Ok(Connection::opened(
-		// 						self.endpoint.clone(),
-		// 						self.id_allocator.lock().unwrap().allocate()?,
-		// 						address,
-		// 					))
-		// 				},
-		// 				AcceptDecision::Reject => {
-		// 					// TODO: send reject packet
-		// 					Err(AcceptError::PredicateFail)
-		// 				},
-		// 				AcceptDecision::Ignore => Err(AcceptError::PredicateFail),
-		// 			}
-		// 		} else {
-		// 			Err(AcceptError::InvalidRequest(address))
-		// 		}
-		// 	},
-		// 	Err(error) => Err(error.into()),
-		// }
+		if self.request_packets.is_empty() {
+			self.recv_connectionless_packets()?;
+			if self.request_packets.is_empty() {
+				return Err(AcceptError::NoPendingConnections)
+			}
+		}
+		let (len, src) = self.request_packets.pop().unwrap();
+		let packet = &self.packet_buffer[self.packet_buffer.len() - len ..];
+		match predicate(src, packet::get_parcel_segment(packet)) {
+			AcceptDecision::Allow => {
+				Ok(Connection::opened(
+					self.endpoint.clone(),
+					self.id_allocator.allocate()?,
+					src,
+				))
+			},
+			AcceptDecision::Reject => {
+				todo!("Send reject packet")
+			},
+			AcceptDecision::Ignore => Err(AcceptError::PredicateFail),
+		}
 	}
 
 	/// Inform the listener about a connection that was closed.
@@ -109,12 +102,32 @@ impl<E, P> ConnectionListener<E, P> where
 	/// Note that the connection_id must have been assigned by the listener itself, in other
 	/// words the connection closed must have come from the result of
 	/// [`try_accept()`](ConnectionListener::try_accept).
-	pub fn connection_closed(&self, connection_id: ConnectionId) {
-		self.id_allocator.lock().unwrap().free(connection_id)
+	pub fn connection_closed(&mut self, connection_id: ConnectionId) {
+		self.id_allocator.free(connection_id);
+		self.endpoint.block(connection_id);
+	}
+
+	/// Receive packets on the endpoint and populate packet buffer with connectionless ones.
+	fn recv_connectionless_packets(&mut self) -> Result<(), TransmitError> {
+		assert!(self.request_packets.is_empty());
+		self.packet_buffer.resize(E::MAX_FRAME_LENGTH, 0);
+		recv_filter_and_demux_all(&mut self.endpoint, &mut self.packet_buffer)?;
+
+		let packet_buffer = &mut self.packet_buffer;
+		let request_packets = &mut self.request_packets;
+		let (dgram_count, byte_count) = self.endpoint.get_buffered_counts(0);
+		packet_buffer.reserve(byte_count);
+		request_packets.reserve(dgram_count);
+		self.endpoint.process(0, |(dgram, src)| {
+			request_packets.push((dgram.len(), src));
+			packet_buffer.extend_from_slice(dgram);
+		});
+
+		Ok(())
 	}
 }
 
-impl<T, D, P> ConnectionListener<(T, D), P> where
+impl<T, D, P> ConnectionListener<Arc<(T, D)>, P> where
 	T: Transmit,
 	D: Demux<ConnectionId>,
 	P: Parcel,

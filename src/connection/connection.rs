@@ -1,8 +1,12 @@
 //! Definitions of connection-related structs. This is the primary export of the library.
+//!
+//! A connection is a virtual link between 2 endpoints, typically separate machines. These
+//! links facilitate exchanging data between the 2 endpoints.
+
+mod context;
 
 #![cfg_attr(debug_assertions, allow(dead_code, unused_imports, unused_variables))]
 
-mod error;
 
 pub use error::{ConnectError, ConnectionError, PendingConnectionError};
 
@@ -22,9 +26,7 @@ use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
-const RESYNC_PERIOD: Duration = Duration::from_millis(200);
-
-/// State of a [Connection](Connection).
+/// State of a [`Connection`](Connect).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ConnectionStatus {
 	/// Normal functioning state.
@@ -42,7 +44,7 @@ pub enum ConnectionStatus {
 	Closed,
 }
 
-/// A virtual connection with to remote access point.
+/// A virtual link to a remote access point.
 ///
 /// This connection is not backed by a stable route (like TCP connections), however it
 /// still provides similar functionality.
@@ -52,13 +54,8 @@ pub enum ConnectionStatus {
 /// - P: [Parcel](super::Parcel) type of passed messages used by this [`Connection`](Self).
 /// - H: [StableBuildHasher](super::StableBuildHasher) hasher provided for the connection that is
 /// used to validate transmitted packets.
-///
-/// *NOTE: messages with incorrect hash are immediately discarded, meaning both ends of a
-/// connection need to have exact same `BuildHasher`. It is recommended to seed the hasher
-/// with a unique secret seed for the application.
 #[derive(Debug)]
-pub struct Connection<T: Transmit, P: Parcel> {
-	endpoint: T,
+pub struct Connection<P: Parcel> {
 	connection_id: ConnectionId,
 	remote: SocketAddr,
 	packet_buffer: Vec<u8>,
@@ -75,15 +72,14 @@ pub struct Connection<T: Transmit, P: Parcel> {
 	_message_type: PhantomData<P>,
 }
 
-impl<T: Transmit, P: Parcel> Connection<T, P> {
+impl<P: Parcel> Connection<P> {
 	/// Construct a connection in an open state.
-	pub(crate) fn opened(endpoint: T, connection_id: ConnectionId, remote: SocketAddr) -> Self {
+	pub(crate) fn opened(connection_id: ConnectionId, remote: SocketAddr) -> Self {
 		let now = Instant::now();
 		Self {
-			endpoint,
 			connection_id,
 			remote,
-			packet_buffer: Vec::with_capacity(T::MAX_FRAME_LENGTH),
+			packet_buffer: Vec::new(),
 			status: ConnectionStatus::Open,
 			last_sent_packet_time: now,
 			last_received_packet_time: now,
@@ -97,21 +93,20 @@ impl<T: Transmit, P: Parcel> Connection<T, P> {
 	}
 }
 
-impl<E: Transmit, P: Parcel> Connection<E, P> {
-	const MAX_PAYLOAD_LENGTH: usize = E::MAX_FRAME_LENGTH - size_of::<packet::PacketHeader>();
-
+impl<P: Parcel> Connection<P> {
 	/// Attempt to establish a new connection to provided remote address from provided local one.
-	#[inline]
-	pub fn connect(
-		endpoint: E,
+	pub fn connect<T: Transmit>(
+		endpoint: &T,
 		remote: SocketAddr,
 		payload: Vec<u8>,
-	) -> Result<PendingConnection<E, P>, ConnectError> {
-		if payload.len() > Self::MAX_PAYLOAD_LENGTH {
+	) -> Result<PendingConnection<P>, ConnectError> {
+		let max_payload_length = endpoint.max_datagram_length() - size_of::<packet::PacketHeader>();
+
+		if payload.len() > max_payload_length {
 			Err(ConnectError::PayloadTooLarge)
 		} else {
 			let handshake_id = random::<u32>().to_ne_bytes();
-			let mut packet_buffer = Vec::with_capacity(E::MAX_FRAME_LENGTH);
+			let mut packet_buffer = Vec::with_capacity(endpoint.max_datagram_length());
 			packet_buffer.resize_with(payload.len() + size_of::<packet::PacketHeader>(), Default::default);
 			packet::write_header(
 				&mut packet_buffer,
@@ -124,7 +119,6 @@ impl<E: Transmit, P: Parcel> Connection<E, P> {
 			packet_buffer.clear();
 			let communication_time = Instant::now();
 			Ok(PendingConnection {
-				endpoint,
 				remote,
 				packet_buffer,
 				last_sent_packet_time: communication_time,
@@ -155,25 +149,7 @@ impl<E: Transmit, P: Parcel> Connection<E, P> {
 	///
 	/// Includes the data prelude from the network packet the parcel was transmitted with. Will query
 	/// the socket, pop any pending network packets and finally pop a parcel.
-	///
-	/// # Note
-	/// Prefer using [`pop_mux_parcel`](Connection::pop_mux_parcel) if possible, as it allows multiple
-	/// connections to share the same endpoint.
 	pub fn pop_parcel(&mut self) -> Result<(P, [u8; 4]), ConnectionError> {
-		todo!()
-	}
-
-	/// Get the next parcel from the connection.
-	///
-	/// Includes the data prelude from the network packet the parcel was transmitted with. Will query
-	/// the socket, pop any pending network packets and finally pop a parcel.
-	///
-	/// # Note
-	/// Behaves similarly to [`pop_parcel`](Connection::pop_parcel), except demultiplexes read packets
-	/// allowing multiple connection to share the same endpoint.
-	pub fn pop_mux_parcel(&mut self) -> Result<(P, [u8; 4]), ConnectError> where
-		E: Demux<ConnectionId>,
-	{
 		todo!()
 	}
 
@@ -254,27 +230,6 @@ impl<E: Transmit, P: Parcel> Connection<E, P> {
 		todo!()
 	}
 
-	/// Attempt to read data from the connection stream into the provided buffer.
-	///
-	/// # Returns
-	/// Number of bytes read.
-	///
-	/// # Streams
-	/// Connection streams offer
-	/// [TCP](https://en.wikipedia.org/wiki/Transmission_Control_Protocol)-like functionality
-	/// for contiguous streams of data. Streams are transmitted with the same network packets
-	/// as reliable parcels, reducing overall data duplication for lost packets.
-	///
-	/// # Notes
-	/// - Will not read past the end of the provided buffer.
-	/// - Behaves similarly to [`read_from_stream`](Connection::read_from_stream) except this also
-	/// demultiplexes incoming packets, allowing multiple connections to share the same endpoint.
-	pub fn read_from_mux_stream(&mut self, buffer: &mut [u8]) -> Result<usize, ConnectionError> where
-		E: Demux<ConnectionId>,
-	{
-		todo!()
-	}
-
 	/// Query the amount of bytes ready to be read from the incoming stream.
 	///
 	/// # Streams
@@ -300,7 +255,7 @@ impl<E: Transmit, P: Parcel> Connection<E, P> {
 	}
 }
 
-impl<T: Transmit, P: Parcel> PartialEq for Connection<T, P> {
+impl<P: Parcel> PartialEq for Connection<P> {
 	fn eq(&self, rhs: &Self) -> bool {
 		self.connection_id == rhs.connection_id && self.remote == rhs.remote
 	}
@@ -310,8 +265,7 @@ impl<T: Transmit, P: Parcel> PartialEq for Connection<T, P> {
 ///
 /// Primary purpose is to be promoted to a full connection once established or dropped on timeout.
 #[derive(Debug)]
-pub struct PendingConnection<T: Transmit, P: Parcel> {
-	endpoint: T,
+pub struct PendingConnection<P: Parcel> {
 	remote: SocketAddr,
 	packet_buffer: Vec<u8>,
 	last_sent_packet_time: Instant,
@@ -322,12 +276,12 @@ pub struct PendingConnection<T: Transmit, P: Parcel> {
 	_message_type: PhantomData<P>,
 }
 
-impl<T: Transmit, P: Parcel> PendingConnection<T, P> {
+impl<P: Parcel> PendingConnection<P> {
 	/// Attempt to promote the pending connection to a full [`Connection`](Connection).
 	///
 	/// Receives any pending network packets, promoting the connection to a full
 	/// [`Connection`](Connection) if valid GNet packets were received.
-	pub fn try_promote(self) -> Result<Connection<T, P>, PendingConnectionError<T, P>> {
+	pub fn try_promote(self) -> Result<Connection<P>, PendingConnectionError<P>> {
 		todo!()
 	}
 
@@ -341,7 +295,7 @@ impl<T: Transmit, P: Parcel> PendingConnection<T, P> {
 	///
 	/// - Reads any pending network packets, filtering them.
 	/// - If no packets have been received for half a timeout window re-sends the request.
-	pub fn sync(&mut self) -> Result<(), PendingConnectionError<T, P>> {
+	pub fn sync(&mut self) -> Result<(), PendingConnectionError<P>> {
 		todo!()
 	}
 }

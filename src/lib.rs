@@ -17,15 +17,5 @@
 #![warn(clippy::all)]
 
 pub mod byte;
-pub mod endpoint;
-#[cfg(feature = "protocol")]
-pub mod protocol;
-
-/// Most commonly used library exports.
-pub mod prelude {
-	#[cfg(feature = "protocol")]
-	pub use super::protocol::{
-		connection::{Connection, ConnectionError, PendingConnection, PendingConnectionError},
-		listen::{AcceptError, AcceptDecision, ConnectionListener},
-	};
-}
+// pub mod endpoint;
+pub mod connection;

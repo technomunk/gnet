@@ -1,6 +1,6 @@
-use gnet::prelude::*;
 use gnet::byte::ByteSerialize;
-use std::collections::HashMap;
+use gnet::connection::context::Context;
+use gnet::connection::packet;
 use std::net::{SocketAddr, UdpSocket};
 
 #[derive(Debug, PartialEq, Clone)]
@@ -50,41 +50,37 @@ impl ByteSerialize for TestParcel {
 	}
 }
 
-impl gnet::protocol::Parcel for TestParcel {}
+impl gnet::connection::Parcel for TestParcel {}
 
 #[test]
 fn single_client_test() {
 	const REQUEST_PAYLOAD: &[u8] = b"Single Client Test Connection Request";
+
+	let mut byte_buffer = vec![0; 1200].into_boxed_slice();
 
 	let test_parcel = TestParcel::String("Hello there friend!".to_string());
 
 	let listener_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 2100));
 	let client_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 2101));
 
-	let listener = ConnectionListener::with_transmitter_and_demultiplexer(
-		UdpSocket::bind(listener_addr).expect("Failed to open listening socket!"),
-		HashMap::new(),
-	);
-	let client_connection = Connection::connect(
-		UdpSocket::bind(client_addr).expect("Failed to open client socket!"),
-		listener_addr,
-		REQUEST_PAYLOAD.to_vec(),
-	).expect("Failed to begin establishing a connection from the client!");
+	// Set up listener
+	// TODO:
+	let listener_socket = UdpSocket::bind(listener_addr).expect("Faild to bind listener socket.");
+	// Listener::new()
+	
+	// Set up client
+	let client_socket = UdpSocket::bind(client_addr).expect("Failed to bind client socket");
+	let mut client_context = Context::<TestParcel>::pending();
 
-	let accept_result = listener.try_accept(|addr, payload| {
-		if addr == client_addr && payload == REQUEST_PAYLOAD {
-			gnet::protocol::listen::AcceptDecision::Allow
-		} else {
-			gnet::protocol::listen::AcceptDecision::Ignore
-		}
-	});
+	// Connect
+	let len = client_context.build_request_packet(&mut byte_buffer, REQUEST_PAYLOAD).unwrap();
+	client_socket.send_to(&byte_buffer[.. len], listener_addr).unwrap();
+	
+	// Accept
+	let (recv_bytes, recv_addr) = listener_socket.recv_from(&mut byte_buffer).unwrap();
+	assert_eq!(recv_addr, client_addr);
+	// TODO: listener utility that allows constructing accept packet
+	assert_eq!(packet::get_data_segment(&byte_buffer[.. recv_bytes]), REQUEST_PAYLOAD);
 
-	let mut server_connection = accept_result.expect("Failed to accept client connection!");
-	server_connection.push_reliable_parcel(test_parcel.clone()).unwrap();
-	server_connection.flush().unwrap();
-
-	let mut client_connection = client_connection.try_promote().unwrap();
-	let (received_parcel, _) = client_connection.pop_parcel().unwrap();
-
-	assert_eq!(test_parcel, received_parcel);
+	// TODO: send and receive parcels from both ends
 }

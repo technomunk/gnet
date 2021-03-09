@@ -35,8 +35,8 @@ pub enum TransmitError {
 /// - Packets are delivered in a best-effort manner (may be dropped).
 /// - Packets are delivered in no particular order.
 pub trait Transmit {
-	/// Maximum number of bytes the sent or received datagrams may consist of.
-	const MAX_FRAME_LENGTH: usize;
+	/// Current maximum size of a sent data packet.
+	fn max_datagram_length(&self) -> usize;
 
 	/// Send provided data to the provided address.
 	///

@@ -17,7 +17,3 @@ documentation = "https://docs.rs/gnet"
 rand = "0.8.2"
 
 [features]
-default = ["protocol"]
-
-protocol = []
-adv-endpoints = []

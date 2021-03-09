@@ -1,7 +1,5 @@
 //! [`Demux`](Demux) trait definition, implementation and test.
 
-// #[cfg(feature = "basic-endpoints")]
-// pub mod basic;
 #[cfg(test)]
 pub mod test;
 
@@ -41,6 +39,12 @@ pub trait Demux<K> {
 	/// - The order of invocations is up to the implementation.
 	/// - The implementation may assume the key is allowed at the time of invocation.
 	fn process<F: FnMut((&[u8], SocketAddr))>(&mut self, key: K, functor: F);
+
+	/// Get the number of buffered datagrams and the number of buffered bytes for those datagrams.
+	///
+	/// # Notes
+	/// - The implementation may assume the key is allowed at the time of invocation.
+	fn get_buffered_counts(&self, key: K) -> (usize, usize);
 }
 
 impl<K: Hash + Eq> Demux<K> for HashMap<K, (Vec<u8>, Vec<(usize, SocketAddr)>)> {
@@ -71,5 +75,9 @@ impl<K: Hash + Eq> Demux<K> for HashMap<K, (Vec<u8>, Vec<(usize, SocketAddr)>)> 
 		}
 		infos.clear();
 		bytes.clear();
+	}
+	fn get_buffered_counts(&self, key: K) -> (usize, usize) {
+		let (bytes, infos) = self.get(&key).unwrap();
+		(infos.len(), bytes.len())
 	}
 }

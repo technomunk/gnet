@@ -9,7 +9,6 @@
 //! implementations that will be used by GNet. It is recommended to use generic [tests](test), as they
 //! test specific details that are important for correct GNet functionality.
 
-use std::borrow::{Borrow, BorrowMut};
 use std::io::Error as IoError;
 use std::net::{ToSocketAddrs, SocketAddr};
 
@@ -40,24 +39,28 @@ impl<T: Transmit, D> Transmit for (T, D) {
 impl<T, K, D: Demux<K>> Demux<K> for (T, D) {
 	#[inline]
 	fn allow(&mut self, key: K) {
-		self.1.borrow_mut().allow(key)
+		self.1.allow(key)
 	}
 	#[inline]
 	fn block(&mut self, key: K) {
-		self.1.borrow_mut().block(key)
+		self.1.block(key)
 	}
 	#[inline]
 	fn is_allowed(&self, key: K) -> bool {
-		self.1.borrow().is_allowed(key)
+		self.1.is_allowed(key)
 	}
 	
 	#[inline]
 	fn push(&mut self, key: K, dgram: (&[u8], SocketAddr)) {
-		self.1.borrow_mut().push(key, dgram)
+		self.1.push(key, dgram)
 	}
 	#[inline]
 	fn process<F: FnMut((&[u8], SocketAddr))>(&mut self, key: K, functor: F) {
-		self.1.borrow_mut().process(key, functor);
+		self.1.process(key, functor);
+	}
+	#[inline]
+	fn get_buffered_counts(&self, key: K) -> (usize, usize) {
+		self.1.get_buffered_counts(key)
 	}
 }
 

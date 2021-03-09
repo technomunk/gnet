@@ -8,8 +8,11 @@ use std::io::Error as IoError;
 use std::net::{ToSocketAddrs, SocketAddr, UdpSocket};
 
 impl Transmit for UdpSocket {
-	// Conservative MTU approximation.
-	const MAX_FRAME_LENGTH: usize = 1200;
+	#[inline]
+	fn max_datagram_length(&self) -> usize {
+		// Conservative MTU approximation.
+		1200
+	}
 	
 	#[inline]
 	fn send_to(&self, data: &[u8], addr: SocketAddr) -> Result<usize, IoError> {

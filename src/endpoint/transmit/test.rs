@@ -18,9 +18,9 @@ pub fn generic_transmit_test<S: Transmit, R: Transmit>(
 ) {
 	let max_datagram_length = DATAGRAMS.iter().fold(0, |acc, x| max(acc, x.len()));
 
-	assert!(S::MAX_FRAME_LENGTH >= max_datagram_length);
-	assert!(S::MAX_FRAME_LENGTH >= max_datagram_length);
-	assert!(R::MAX_FRAME_LENGTH >= S::MAX_FRAME_LENGTH);
+	assert!(sender.max_datagram_length() >= max_datagram_length);
+	assert!(receiver.max_datagram_length() >= max_datagram_length);
+	assert!(receiver.max_datagram_length() >= sender.max_datagram_length());
 
 	assert_eq!(
 		sender.send_to(DATAGRAMS[0], receiver_addr).expect("Failed to send first datagram!"),
@@ -31,7 +31,7 @@ pub fn generic_transmit_test<S: Transmit, R: Transmit>(
 		DATAGRAMS[1].len(),
 	);
 
-	let mut buffer = vec![0; R::MAX_FRAME_LENGTH];
+	let mut buffer = vec![0; receiver.max_datagram_length()];
 
 	let recv_result = receiver.try_recv_from(&mut buffer).unwrap();
 	if &buffer[.. DATAGRAMS[0].len()] == DATAGRAMS[0] {
