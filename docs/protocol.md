@@ -9,10 +9,10 @@ does so in a manner inspired by Gaffer on Games
 [networking article](https://www.gafferongames.com/tags/networking/). The core principle is to
 provide any received data to the application as soon as it arrives, even if some data is missing
 in between. GNet provides virtual `Connections` over
-[UDP](https://en.wikipedia.org/wiki/User_Datagram_Protocol) that can send and receive `Packages`,
-a binary-serializeable data type. The `Packages` are application-specific data serialized version
+[UDP](https://en.wikipedia.org/wiki/User_Datagram_Protocol) that can send and receive `Messages`,
+a binary-serializeable data type. The `Message` are application-specific data serialized version
 of which does not exceed a certain maximum size (typically 1KiB). The `Connections` also provide a
-binary stream for larger messages, however it is less efficient than `Packages` (because of
+binary stream for larger messages, however it is less efficient than `Messages` (because of
 additional order guarantees) or `TCP` (which has the benefit of lower-level implementation as well
 as hardware implementations).
 
@@ -21,14 +21,14 @@ as hardware implementations).
 - **Address** - a unique identifier of an **endpoint** on the network.
 - **Datagram** - sequence of bytes sent across network. Has an associated source and destination
 addresses.
-- **Packet** - a datagram that includes a GNet header.
-- **Package** - an application defined data type that can be serialized and deserialized into a
-small number of bytes (smaller than **packet** size) that is used to transmit application data with
+- **Parcel** - a datagram that includes a GNet header.
+- **Message** - an application defined data type that can be serialized and deserialized into a
+small number of bytes (smaller than **parcel** size) that is used to transmit application data with
 reduced delay.
 - **Stream** - a contiguous collection of bytes synchronized across network. Used to transmit
-application data that can't be transmitted using **packages**.
+application data that can't be transmitted using **Messages**.
 - **Endpoint** - one of 2 ends of a **connection** that is responsible for sending and receiving
-**packets** across network.
+**parcels** across network.
 - **Connection** - a virtual link between 2 **endpoints**.
 - **Client** - an **endpoint** that initializes a **connection** by requesting it from **server**.
 A typical use-case has multiple clients and a single **server**, however in a
@@ -38,9 +38,50 @@ A typical use-case has multiple clients and a single **server**, however in a
 - **Listener** - a specialized **endpoint** for **servers** that can receive incoming requests for
 connections and either *accept*, *deny* or *ignore* them.
 
-## Protocol
+## Parcel anatomy
 
-### Establishing a connection
+GNet uses [User Datagram Protocol](https://en.wikipedia.org/wiki/User_Datagram_Protocol).
+
+### Header
+
+Each GNet parcel starts with 1 byte **signal** bitmask. The signalling bits are as follows:
+
+0. **Connection** - whether the parcel is associated with an existent connection. If set the
+ **signal** is followed by a *connection id*. If unset the **signal** is followed by
+ *handshake id*.
+1. **Answer | Indexed** - if **connection** bit is set signals whether the parcel is *indexed*. If
+set the **signal** is followed by packet id. Non-indexed parcels may not be acknowledged and are
+thus only delivered in the best-effort manner. If **connection** bit is unset signals whether the
+parcel is a new connection request or an answer to one. The parcel is an answer to a connection
+request parcel if set.
+2. **Accept | Acknowledge** - if **connection** bit is set signals whether the parcel contains
+**ack mask**. If **connection** bit is not set signals whether the connection requested was
+accepted, if set the **signal** is followed by **connection id**.
+3. **Message** - the parcel contains some **message** bytes. If set the **signal** is followed by
+*message length*. Requires **connection** bit to be set.
+4. **Stream** - the parcel contains application **stream** slice. If set the **signal** is followed
+by *stream length*. Requires **connection** bit to be set.
+5. **RESERVED 0** - reserved for future use by GNet. Must be unset.
+6. **RESERVED 1** - reserved for future use by GNet. Must be unset.
+7. **Parity** - parity bit for the **signal**. The whole bitmask must have odd parity. IE the
+**parity** bit should be set if there are even number of other set bits.
+
+Structure:
+
+- **Signal** (1 byte) : bitmask that signals how the following bytes should be interpreted.
+- **Connection id | Handshake id** (2 bytes) : unique identifier of the parcel context.
+- **Packet index** (optional 1 byte) : identifying number of the packet.
+- **Ack mask** (optional 9 bytes) : identification of received parcel indices by the other end of the
+connection.
+- **Message length** (optional 2 bytes) : number of bytes that contain application **messages**.
+- **Stream length** (optional 2 bytes) : number of bytes that contain application data **stream** slice.
+
+Packets are deemed lost if:
+
+- Their acknowledgement has not been received for 2xRTT time.
+- Their acknowledgement has not been received, but acknowledgements for 8 subsequent packets have.
+
+## Establishing a connection
 
 In order to establish a connection a **server** and at least a single **client** is required. The
 **server** begins listening for incoming connections by opening a `ConnectionListener`. Once the
@@ -54,43 +95,18 @@ continue attempting to perform the [*establishing handshake*](#establishing-hand
 receives a rejection from the **server** or timeout period is reached, at which point any calls
 to `try_promote()` are guaranteed to return appropriate errors.
 
-### Establishing handshake
+## Establishing handshake
 
-A **client** generates a random *handshake id* and sends a `connection_request` packet with
+A **client** generates a random *handshake id* and sends a `connection_request` parcel with
 payload supplied from the application. Upon receiving the request, the `ConnectionListener`
 remembers the *handshake id* and associates a *connection id* with it, creating a new
 `Connection` that may be used by the **server**. The `ConnectionListener` also sends a
-`connection_accept` packet, which includes new client id and has the same *handshake id* as the
+`connection_accept` parcel, which includes new client id and has the same *handshake id* as the
 request. The listener will repeatedly answer with `connection_accept` upon receiving duplicate
 `connection_request` with the same *handshake id* as the accepted request, as long as the
 `Connection` with the resulting id is live on the **server** side.
 
-### Transmitting data
+## Transmitting data
 
-Application data is transmitted through 2 mechanisms: **packages** and **streams**.
+Application data is transmitted through 2 mechanisms: **messages** and **streams**.
 <!-- TODO: explain the difference and their benefits -->
-
-## Packet anatomy
-
-GNet uses [User Datagram Protocol](https://en.wikipedia.org/wiki/User_Datagram_Protocol) with
-statically sized packets.
-
-Packets consist of a header and payload, the header has following structure:
-
-- **Hash** (4 bytes) : a safety checksum seeded with an application-specific secret.
-- **Connection id** (2 bytes) : a unique identifier for connection (session) between 2 endpoints.
-- **Packet id** (1 byte) : unique identifier of this network packet.
-- **Acknowledged packet id** (1 byte) : unique identifier of the latest (largest) acknowledged
-network packet by the other endpoint.
-- **Acknowledged packet mask** (8 bytes) : individual bits representing previous 64 received packets.
-- **Signal** (4 bytes) : signalling bitpatterns.
-- **Data prelude** (4 bytes) : application data specific to a network packet.
-
-Reliable packets get assigned a numeric sequence id, which uniquely identifies them. Up to 65
-reliable packets may be in-flight (in unacknowledged state) at once to avoid over-complicating
-deduplication logic. Packets deemed lost are simply re-sent as-is.
-
-Packets are deemed lost if:
-
-- Their acknowledgement has not been received for 2xRTT time.
-- Their acknowledgement has not been received, but acknowledgements for 8 subsequent packets have.
