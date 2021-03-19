@@ -46,23 +46,22 @@ GNet uses [User Datagram Protocol](https://en.wikipedia.org/wiki/User_Datagram_P
 
 Each GNet parcel starts with 1 byte **signal** bitmask. The signalling bits are as follows:
 
-0. **Connection** - whether the parcel is associated with an existent connection. If set the
- **signal** is followed by a *connection id*. If unset the **signal** is followed by
- *handshake id*.
-1. **Answer | Indexed** - if **connection** bit is set signals whether the parcel is *indexed*. If
-set the **signal** is followed by packet id. Non-indexed parcels may not be acknowledged and are
-thus only delivered in the best-effort manner. If **connection** bit is unset signals whether the
-parcel is a new connection request or an answer to one. The parcel is an answer to a connection
-request parcel if set.
-2. **Accept | Acknowledge** - if **connection** bit is set signals whether the parcel contains
-**ack mask**. If **connection** bit is not set signals whether the connection requested was
-accepted, if set the **signal** is followed by **connection id**.
-3. **Message** - the parcel contains some **message** bytes. If set the **signal** is followed by
-*message length*. Requires **connection** bit to be set.
-4. **Stream** - the parcel contains application **stream** slice. If set the **signal** is followed
+0. **Connection** - signals whether the parcel is associated with an existent connection. If set
+the **signal** is followed by a *connection id*. If unset the **signal** is followed by
+*handshake id* and the parcel is a request for a new connection.
+1. **Answer** - signals whether the parcel is an answer to an request. If both **answer** and
+**connection** bits are set then the request was accepted. If set the **signal** is followed by
+*handshake id* of the request being answered. ***Note*** if the **connection** bit is also set the
+parcel should still only contain 1 *handshake id*.
+2. **RESERVED** - reserved for future use, must be unset.
+3. **Index** - signals whether the parcel is *indexed*. If set the **signal** is followed by parcel
+id. Indexed parcels must be acknowledged by the other end of the connection. Requires
+**connection** bit to be set. Unindexed parcels are delivered in best-effort manner.
+4. **Acknowledge** - signals whether the parcel contains **ack mask**.
+5. **Message** - the parcel contains some **message** bytes. If set the **signal** is followed by
+*message length*.
+6. **Stream** - the parcel contains application **stream** slice. If set the **signal** is followed
 by *stream length*. Requires **connection** bit to be set.
-5. **RESERVED 0** - reserved for future use by GNet. Must be unset.
-6. **RESERVED 1** - reserved for future use by GNet. Must be unset.
 7. **Parity** - parity bit for the **signal**. The whole bitmask must have odd parity. IE the
 **parity** bit should be set if there are even number of other set bits.
 
