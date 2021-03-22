@@ -94,6 +94,29 @@ impl Header {
 		}
 	}
 
+	/// Construct a new instance that signals that the parcel is associated with a connection.
+	#[inline]
+	pub fn connected(connection_id: ConnectionId) -> Self {
+		Self {
+			signal: Signal::connected(),
+			connection_id,
+			.. Self::default()
+		}
+	}
+
+	/// Construct a new instance that contains provided parcel index.
+	///
+	/// # Note
+	/// There are valid GNet parcels that are not indexed.
+	#[inline]
+	pub fn indexed(self, index: ParcelIndex) -> Self {
+		Self {
+			signal: self.signal.indexed(),
+			index,
+			.. self
+		}
+	}
+
 	/// Construct a version of the provided header that signals that the parcel contains
 	/// provided number of user-app message bytes.
 	#[inline]
@@ -113,8 +136,6 @@ impl Header {
 			.. self
 		}
 	}
-
-	// TODO: add more update functions
 
 	/// Get the signal bitmask pattern of the parcel header.
 	#[inline]
@@ -361,5 +382,36 @@ mod test {
 		let (read, read_size) = Header::read_from(&buffer).unwrap();
 		assert_eq!(written_size, read_size);
 		assert_eq!(written, read);
+	}
+
+	#[test]
+	fn message_slice_is_correct() {
+		let empty = Header::connected(0).indexed(0.into());
+		let parcel = [0; 64];
+		
+		assert_eq!(empty.message_slice(&parcel), Err(SliceError::ElementDoesNotExist));
+
+		let stream_only = empty.with_stream();
+		assert_eq!(stream_only.message_slice(&parcel), Err(SliceError::ElementDoesNotExist));
+
+		let message_only = Header::default().with_message(20);
+		let expected_slice = &parcel[message_only.size() .. message_only.size() + 20];
+		assert_eq!(message_only.message_slice(&parcel), Ok(expected_slice));
+	}
+
+	#[test]
+	fn stream_slice_is_correct() {
+		let empty = Header::connected(0).indexed(0.into());
+		let parcel = [0; 64];
+		
+		assert_eq!(empty.stream_slice(&parcel), Err(SliceError::ElementDoesNotExist));
+
+		let message_only = Header::connected(0).with_message(20);
+		assert_eq!(message_only.stream_slice(&parcel), Err(SliceError::ElementDoesNotExist));
+
+		let stream_only = empty.with_stream();
+		let stream_offset = stream_only.stream_offset().unwrap();
+		let expected_slice = &parcel[stream_offset .. stream_offset];
+		assert_eq!(stream_only.stream_slice(&parcel), Ok(expected_slice));
 	}
 }

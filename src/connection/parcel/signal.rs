@@ -220,7 +220,7 @@ impl Signal {
 		// TODO/https://github.com/rust-lang/rust/issues/51999 : mark const
 		debug_assert!(self.is_connected(), "Stream parcels must be connected!");
 		debug_assert!(self.is_indexed(), "Stream parcels must be reliable (indexed)!");
-		Self { bits: self.bits | ACKNOWLEDGE_MASK }.with_correct_parity()
+		Self { bits: self.bits | STREAM_MASK }.with_correct_parity()
 	}
 
 	/// Check whether the signal is of odd parity.
