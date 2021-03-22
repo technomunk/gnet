@@ -37,6 +37,17 @@ pub enum ReadError {
 	InsufficientBufferLen,
 }
 
+/// Error attempting to slice a parcel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SliceError {
+	/// The sliced part of the parcel does not exist in the provided parcel.
+	ElementDoesNotExist,
+	/// The slice goes out of bounds of the provided parcel.
+	///
+	/// This can be caused by invalid [`Header`](Header).
+	OutOfBounds,
+}
+
 /// Get the number of bytes the signal-implied header takes up in a parcel.
 ///
 /// # Note
@@ -94,6 +105,15 @@ impl Header {
 		}
 	}
 
+	/// Construct a version of the provided header that signals that the parcel contains
+	/// a slice of the user-app stream. 
+	pub fn with_stream(self) -> Self {
+		Self {
+			signal: self.signal.with_stream(),
+			.. self
+		}
+	}
+
 	// TODO: add more update functions
 
 	/// Get the signal bitmask pattern of the parcel header.
@@ -107,11 +127,8 @@ impl Header {
 	/// Returns the id of the connection associated with the parcel.
 	#[inline]
 	pub fn connection_id(&self) -> Option<ConnectionId> {
-		if self.signal.is_connected() {
-			Some(self.connection_id)
-		} else {
-			None
-		}
+		self.signal.is_connected()
+			.then(|| self.connection_id)
 	}
 
 	/// Get the [`HandshakeId`](HandshakeId) of the parcel.
@@ -126,10 +143,88 @@ impl Header {
 		}
 	}
 
+	/// Get the number of bytes of user-app message within the parcel.
+	#[inline]
+	pub fn message_size(&self) -> Option<u16> {
+		self.signal.has_message()
+			.then(|| self.message_size)
+	}
+
+	/// Get the number of bytes of user-app message within the parcel.
+	#[inline]
+	pub fn stream_size(&self) -> Option<u16> {
+		self.signal.has_stream()
+			.then(|| self.stream_size)
+	}
+
 	/// Get the number of bytes the header takes up in a parcel.
 	#[inline]
 	pub fn size(&self) -> usize {
 		signalled_size(self.signal)
+	}
+
+	/// Get the message slice from the provided parcel assuming the header is correct.
+	#[inline]
+	pub fn message_slice<'a>(&self, parcel: &'a [u8]) -> Result<&'a [u8], SliceError> {
+		let message_start = self.message_offset().ok_or(SliceError::ElementDoesNotExist)?;
+		let message_end = message_start + self.message_size as usize;
+		if message_end <= parcel.len() {
+			Ok(&parcel[message_start .. message_end])
+		} else {
+			Err(SliceError::OutOfBounds)
+		}
+	}
+
+	/// Get the mutable message slice from the provided parcel assuming the header is correct.
+	#[inline]
+	pub fn mut_message_slice<'a>(&self, parcel: &'a mut [u8]) -> Result<&'a mut [u8], SliceError> {
+		let message_start = self.message_offset().ok_or(SliceError::ElementDoesNotExist)?;
+		let message_end = message_start + self.message_size as usize;
+		if message_end <= parcel.len() {
+			Ok(&mut parcel[message_start .. message_end])
+		} else {
+			Err(SliceError::OutOfBounds)
+		}
+	}
+
+	/// Get the stream slice from the provided parcel assuming the header is correct.
+	#[inline]
+	pub fn stream_slice<'a>(&self, parcel: &'a [u8]) -> Result<&'a [u8], SliceError> {
+		let stream_start = self.stream_offset().ok_or(SliceError::ElementDoesNotExist)?;
+		let stream_end = stream_start + self.message_size as usize;
+		if stream_end <= parcel.len() {
+			Ok(&parcel[stream_start .. stream_end])
+		} else {
+			Err(SliceError::OutOfBounds)
+		}
+	}
+
+	/// Get the mutable stream slice from the provided parcel assuming the header is correct.
+	#[inline]
+	pub fn mut_stream_slice<'a>(&self, parcel: &'a mut [u8]) -> Result<&'a mut [u8], SliceError> {
+		let stream_start = self.stream_offset().ok_or(SliceError::ElementDoesNotExist)?;
+		let stream_end = stream_start + self.message_size as usize;
+		if stream_end <= parcel.len() {
+			Ok(&mut parcel[stream_start .. stream_end])
+		} else {
+			Err(SliceError::OutOfBounds)
+		}
+	}
+
+	/// Get the offset from the beginning of the header to the beginning of the user-app
+	/// message within the parcel.
+	#[inline]
+	pub fn message_offset(&self) -> Option<usize> {
+		self.signal.has_message()
+			.then(|| self.size())
+	}
+
+	/// Get the offset from the beginning of the header to the beginning of the user-app
+	/// stream slice within the parcel.
+	#[inline]
+	pub fn stream_offset(&self) -> Option<usize> {
+		self.signal.has_stream()
+			.then(|| self.size() + self.message_size().unwrap_or(0) as usize)
 	}
 
 	/// Write the header to the beginning of the provided buffer.

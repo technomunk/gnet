@@ -1,86 +1,79 @@
-use gnet::byte::ByteSerialize;
-use gnet::connection::context::Context;
-use gnet::connection::parcel;
+//! Test the GNet ability to connect a single client to a single server.
+//!
+//! Makes sure both endpoints are aware that the connection is established.
+
 use std::net::{SocketAddr, UdpSocket};
-
-#[derive(Debug, PartialEq, Clone)]
-enum TestParcel {
-	String(String),
-	Index(u64),
-}
-
-impl ByteSerialize for TestParcel {
-	fn byte_count(&self) -> usize {
-		match self {
-			Self::String(string) => string.len() + 3,
-			Self::Index(value) => 1 + value.byte_count(),
-		}
-	}
-
-	fn to_bytes(&self, bytes: &mut [u8]) {
-		match self {
-			Self::String(string) => {
-				0u8.to_bytes(bytes);
-				let byte_count = string.len() as u16;
-				byte_count.to_bytes(&mut bytes[1 ..]);
-				let bytes = &mut bytes[byte_count.byte_count() + 1 ..];
-				bytes.copy_from_slice(string.as_bytes());
-			},
-			Self::Index(value) => {
-				1u8.to_bytes(bytes);
-				value.to_bytes(&mut bytes[1 ..]);
-			}
-		}
-	}
-
-	fn from_bytes(bytes: &[u8]) -> Result<(Self, usize), gnet::byte::SerializationError> {
-		let (variant_index, offset) = u8::from_bytes(bytes)?;
-		match variant_index {
-			0 => {
-				let (byte_count, extra_offset) = u16::from_bytes(&bytes[offset ..])?;
-				let string = String::from_utf8(bytes[offset .. offset + byte_count as usize].to_vec())?;
-				Ok((Self::String(string), offset + extra_offset + byte_count as usize))
-			},
-			1 => {
-				let (value, extra_offset) = u64::from_bytes(&bytes[offset ..])?;
-				Ok((Self::Index(value), offset + extra_offset))
-			},
-			_ => Err(gnet::byte::SerializationError::UnexpectedValue),
-		}
-	}
-}
-
-impl gnet::connection::Parcel for TestParcel {}
+use gnet::connection::parcel::{Header};
 
 #[test]
 fn single_client_test() {
-	const REQUEST_PAYLOAD: &[u8] = b"Single Client Test Connection Request";
+	const REQUEST_MESSAGE: &str = "Please?";
 
-	let mut byte_buffer = vec![0; 1200].into_boxed_slice();
-
-	let test_parcel = TestParcel::String("Hello there friend!".to_string());
-
-	let listener_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 2100));
-	let client_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 2101));
-
-	// Set up listener
-	// TODO:
-	let listener_socket = UdpSocket::bind(listener_addr).expect("Faild to bind listener socket.");
-	// Listener::new()
-	
-	// Set up client
+	// Initial client data
+	let client_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 2100));
 	let client_socket = UdpSocket::bind(client_addr).expect("Failed to bind client socket");
-	let mut client_context = Context::<TestParcel>::pending();
+	let mut client_buffer = [0; 1200];
 
-	// Connect
-	let len = client_context.build_request_packet(&mut byte_buffer, REQUEST_PAYLOAD).unwrap();
-	client_socket.send_to(&byte_buffer[.. len], listener_addr).unwrap();
+	// Initial server data
+	let server_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 2101));
+	let server_socket = UdpSocket::bind(server_addr).expect("Failed to bind server socket");
+	let mut server_buffer = [0; 1200];
+
+	// Build request parcel
+	{
+		let message = REQUEST_MESSAGE.as_bytes();
+		let header = Header::request_connection(42).with_message(message.len() as u16);
+		header.write_to(&mut client_buffer);
+		header.mut_message_slice(&mut client_buffer).unwrap().copy_from_slice(message);
+	}
+
+	// Send request
+	{
+		let sent_byte_count = client_socket.send_to(&client_buffer, server_addr)
+			.expect("Failed to send request packet");
+		assert_eq!(sent_byte_count, client_buffer.len());
+	}
+
+	// Receive request
+	{
+		let (received_byte_count, sender_addr) = server_socket.recv_from(&mut server_buffer)
+			.expect("Failed to receive request packet");
+		assert_eq!(received_byte_count, client_buffer.len());
+		assert_eq!(sender_addr, client_addr);
+	}
+
+	// Process and validate received parcel
+	{
+		let (header, _) = Header::read_from(&server_buffer).expect("Failed to deserialize header");
+		assert!(header.signal().is_connection_request());
+		let received_message = header.message_slice(&server_buffer).unwrap();
+		assert_eq!(received_message, REQUEST_MESSAGE.as_bytes());
+	}
 	
-	// Accept
-	let (recv_bytes, recv_addr) = listener_socket.recv_from(&mut byte_buffer).unwrap();
-	assert_eq!(recv_addr, client_addr);
-	// TODO: listener utility that allows constructing accept packet
-	// assert_eq!(packet::get_data_segment(&byte_buffer[.. recv_bytes]), REQUEST_PAYLOAD);
+	// TODO: accept request - ConnectionAcceptor
+	// TODO: construct server-side connection
 
-	// TODO: send and receive parcels from both ends
+	// Build accept parcel
+	{
+		let header = Header::accept_connection(42, 1);
+		header.write_to(&mut server_buffer);
+	}
+
+	// Send accept
+	{
+		let sent_byte_count = server_socket.send_to(&server_buffer, client_addr)
+			.expect("Failed to send accept packet");
+		assert_eq!(sent_byte_count, server_buffer.len());
+	}
+
+	// Receive accept
+	{
+		let (received_byte_count, sender_addr) = client_socket.recv_from(&mut client_buffer)
+			.expect("Failed to receive accept packet");
+		assert_eq!(received_byte_count, server_buffer.len());
+		assert_eq!(sender_addr, server_addr);
+	}
+
+	// TODO: construct client-side connection
+	// TODO: assert both client and server are aware of their connected state
 }
