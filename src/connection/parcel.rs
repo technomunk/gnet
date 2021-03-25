@@ -12,6 +12,8 @@
 //! acknowledging packets or sampling the connection latency.
 
 pub mod index {
+
+	use std::ops::{Add, Sub};
 	use std::num::Wrapping;
 
 	/// Identifying index of the parcel.
@@ -65,6 +67,24 @@ pub mod index {
 	impl Into<u8> for ParcelIndex {
 		#[inline]
 		fn into(self) -> u8 { self.0.0 }
+	}
+
+	impl Sub<u8> for ParcelIndex {
+		type Output = Self;
+		
+		#[inline]
+		fn sub(self, other: u8) -> Self::Output {
+			Self(self.0 - Wrapping(other))
+		}
+	}
+
+	impl Add<u8> for ParcelIndex {
+		type Output = Self;
+		
+		#[inline]
+		fn add(self, other: u8) -> Self::Output {
+			Self(self.0 + Wrapping(other))
+		}
 	}
 }
 

@@ -10,12 +10,12 @@ fn single_client_test() {
 	const REQUEST_MESSAGE: &str = "Please?";
 
 	// Initial client data
-	let client_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 2100));
+	let client_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 2000));
 	let client_socket = UdpSocket::bind(client_addr).expect("Failed to bind client socket");
 	let mut client_buffer = [0; 1200];
 
 	// Initial server data
-	let server_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 2101));
+	let server_addr = SocketAddr::from(([ 127, 0, 0, 1, ], 2001));
 	let server_socket = UdpSocket::bind(server_addr).expect("Failed to bind server socket");
 	let mut server_buffer = [0; 1200];
 
@@ -55,7 +55,7 @@ fn single_client_test() {
 
 	// Build accept parcel
 	{
-		let header = Header::accept_connection(42, 1);
+		let header = Header::accept_connection(0, 0);
 		header.write_to(&mut server_buffer);
 	}
 

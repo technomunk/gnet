@@ -14,12 +14,46 @@ pub struct AckMask {
 pub struct AckError;
 
 impl AckMask {
-	/// Construct a new **AckMask** that only acknowledges provided parcel index.
+	/// Construct a new [`AckMask`](Self) that only acknowledges provided parcel index.
 	pub fn new(acknowledged_parcel: ParcelIndex) -> Self {
 		Self {
 			last_index: acknowledged_parcel,
 			mask: 0,
 		}
+	}
+
+	/// Construct a new [`AckMask`](Self) that misses parcels between 0 and the provided parcel
+	/// index.
+	///
+	/// # Notes
+	/// This mask will acknowledge parcels before 0, assuming they wrapped around. This is due
+	/// to internal layout. This constructor is useful for keeping track of undelivered parcels
+	/// locally.
+	pub fn missed_up_to(acknowledged_parcel: ParcelIndex) -> Self {
+		let mut mask = 0;
+		if acknowledged_parcel < 64.into() {
+			for i in acknowledged_parcel.into() .. 64 {
+				mask |= 1 << i;
+			}
+		}
+		Self {
+			last_index: acknowledged_parcel,
+			mask,
+		}
+	}
+
+	/// Get the last (biggest) acknowledged parcel index.
+	#[inline]
+	pub fn last_index(&self) -> ParcelIndex {
+		self.last_index
+	}
+
+	/// Get the acknowledge bitmask.
+	///
+	/// The bits signal whether `(last_index - (order+1))` indexed is acknowledged by the mask.
+	#[inline]
+	pub fn bitmask(&self) -> u64 {
+		self.mask
 	}
 
 	/// Check whether the mask acknowledges provided parcel index.
@@ -171,5 +205,20 @@ mod test {
 		let mut ack_mask = AckMask::new(12.into());
 		ack_mask.ack(82.into())
 			.expect_err("Acknowledging more 70 indices ahead did not raise error.");
+	}
+
+	#[test]
+	fn missed_mask_acknowledges_wrapped() {
+		let ack_mask = AckMask::missed_up_to(32.into());
+		for i in 0..32 {
+			assert!(!ack_mask.acknowledges(i.into()), "{} acknowledged", i);
+		}
+		assert!(ack_mask.acknowledges(32.into()));
+		for i in 33..=223 {
+			assert!(!ack_mask.acknowledges(i.into()), "{} acknowledged", i);
+		}
+		for i in 224..=255 {
+			assert!(ack_mask.acknowledges(i.into()), "{} not acknowledged", i);
+		}
 	}
 }

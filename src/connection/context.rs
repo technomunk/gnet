@@ -7,7 +7,7 @@ use super::error::{BuildPacketError, ConnectionError};
 use std::marker::PhantomData;
 
 /// State of a connection.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConnectionStatus {
 	/// Normal functioning state.
 	///
